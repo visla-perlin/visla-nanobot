@@ -28,6 +28,7 @@ Pick the row that matches what you want to accomplish next:
 | Goal | Guide |
 |---|---|
 | Learn the browser workbench | [WebUI](./webui.md) |
+| Sign in to the WebUI with a Visla token | [Visla SSO Login](./visla-auth.md) |
 | Connect Telegram, Discord, Slack, Feishu, WeChat, Email, or another chat app | [Chat Apps](./chat-apps.md) |
 | Choose a hosted, OAuth, company, or local model | [Provider Cookbook](./provider-cookbook.md) |
 | Add model fallbacks | [Configure Model Fallback](./guides/configure-model-fallback.md) |
