@@ -20,7 +20,12 @@
       "hidePassword": "Ẩn mật khẩu",
       "submit": "Kết nối",
       "required": "Nhập mật khẩu",
-      "invalid": "Mật khẩu không đúng"
+      "invalid": "Mật khẩu không đúng",
+      "vislaDivider": "hoặc",
+      "vislaLabel": "Mã Visla",
+      "vislaSubmit": "Đăng nhập",
+      "vislaRequired": "Dán mã Visla của bạn",
+      "vislaInvalid": "Mã Visla không hợp lệ hoặc đã hết hạn"
     },
     "account": {
       "section": "Tài khoản",

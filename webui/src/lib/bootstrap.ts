@@ -2,6 +2,7 @@ import type { BootstrapResponse } from "./types";
 import { fetchWithTimeout } from "./http";
 
 const SECRET_STORAGE_KEY = "nanobot-webui.bootstrap-secret";
+const VISLA_TOKEN_STORAGE_KEY = "nanobot-webui.visla-token";
 const URL_SECRET_PARAM = "bootstrapSecret";
 
 export class BootstrapAuthRequiredError extends Error {
@@ -39,6 +40,98 @@ export function clearSavedSecret(): void {
   }
 }
 
+/** Read a previously saved Visla token from localStorage. */
+export function loadSavedVislaToken(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return window.localStorage.getItem(VISLA_TOKEN_STORAGE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/** Persist the Visla token so page reloads can re-exchange silently. */
+export function saveVislaToken(token: string): void {
+  try {
+    window.localStorage.setItem(VISLA_TOKEN_STORAGE_KEY, token);
+  } catch {
+    // ignore storage errors (private mode, etc.)
+  }
+}
+
+/** Clear the saved Visla token (sign out). */
+export function clearSavedVislaToken(): void {
+  try {
+    window.localStorage.removeItem(VISLA_TOKEN_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+export interface AuthMethods {
+  visla: boolean;
+}
+
+/**
+ * Ask the gateway which login methods the auth screen may offer.
+ * Unauthenticated by design; returns no methods when the probe fails.
+ */
+export async function fetchAuthMethods(
+  baseUrl: string = "",
+  timeoutMs?: number,
+): Promise<AuthMethods> {
+  try {
+    const res = await fetchWithTimeout(
+      `${baseUrl}/webui/auth/methods`,
+      { method: "GET", credentials: "same-origin" },
+      timeoutMs,
+    );
+    if (!res.ok) return { visla: false };
+    const body = (await res.json()) as Partial<AuthMethods>;
+    return { visla: body?.visla === true };
+  } catch {
+    return { visla: false };
+  }
+}
+
+export interface VislaExchangeResponse {
+  token: string;
+  expires_in?: number;
+}
+
+/**
+ * Exchange a Visla user token for a one-shot short-lived bootstrap token.
+ * The gateway validates the Visla token upstream; the static gateway secret
+ * never leaves the server. Uses GET because the gateway's embedded HTTP
+ * layer (websockets) only accepts GET; the token travels in the
+ * ``X-Nanobot-Auth`` header so it never appears in the URL.
+ */
+export async function exchangeVislaToken(
+  vislaToken: string,
+  baseUrl: string = "",
+  timeoutMs?: number,
+): Promise<VislaExchangeResponse> {
+  const res = await fetchWithTimeout(
+    `${baseUrl}/webui/auth/visla`,
+    {
+      credentials: "same-origin",
+      headers: { "X-Nanobot-Auth": vislaToken },
+    },
+    timeoutMs,
+  );
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403 || res.status === 429) {
+      throw new BootstrapAuthRequiredError(`visla exchange failed: HTTP ${res.status}`);
+    }
+    throw new Error(`visla exchange failed: HTTP ${res.status}`);
+  }
+  const body = (await res.json()) as VislaExchangeResponse;
+  if (!body?.token) {
+    throw new Error("visla exchange response missing token");
+  }
+  return body;
+}
+
 export function consumeUrlBootstrapSecret(): string {
   if (typeof window === "undefined") return "";
   const hash = window.location.hash || "";
@@ -60,6 +153,52 @@ export function consumeUrlBootstrapSecret(): string {
     `${window.location.pathname}${window.location.search}${nextHash}`,
   );
   return secret;
+}
+
+const URL_VISLA_TOKEN_PARAM = "visla_token";
+
+/**
+ * Read a Visla token from the URL — either ``?visla_token=`` in the plain
+ * query string or in the hash-fragment query — and strip it from the address
+ * bar so it doesn't linger in history or get re-sent on reload.
+ */
+export function consumeUrlVislaToken(): string {
+  if (typeof window === "undefined") return "";
+
+  const stripFrom = (rawQuery: string): { token: string; rest: string } => {
+    const params = new URLSearchParams(rawQuery);
+    const token = params.get(URL_VISLA_TOKEN_PARAM)?.trim() || "";
+    if (!token) return { token: "", rest: rawQuery };
+    params.delete(URL_VISLA_TOKEN_PARAM);
+    return { token, rest: params.toString() };
+  };
+
+  // Plain query string: /?visla_token=...
+  if (window.location.search) {
+    const { token, rest } = stripFrom(window.location.search);
+    if (token) {
+      window.history.replaceState(
+        null,
+        "",
+        `${window.location.pathname}${rest ? `?${rest}` : ""}${window.location.hash}`,
+      );
+      return token;
+    }
+  }
+
+  // Hash-fragment query: /#/?visla_token=...
+  const hash = window.location.hash || "";
+  const queryStart = hash.indexOf("?");
+  if (queryStart < 0) return "";
+  const path = hash.slice(0, queryStart) || "#/";
+  const { token, rest } = stripFrom(hash.slice(queryStart + 1));
+  if (!token) return "";
+  window.history.replaceState(
+    null,
+    "",
+    `${window.location.pathname}${window.location.search}${path}${rest ? `?${rest}` : ""}`,
+  );
+  return token;
 }
 
 /**

@@ -20,7 +20,12 @@
       "hidePassword": "비밀번호 숨기기",
       "submit": "연결",
       "required": "비밀번호를 입력하세요",
-      "invalid": "비밀번호를 확인하세요"
+      "invalid": "비밀번호를 확인하세요",
+      "vislaDivider": "또는",
+      "vislaLabel": "Visla 토큰",
+      "vislaSubmit": "로그인",
+      "vislaRequired": "Visla 토큰을 붙여넣으세요",
+      "vislaInvalid": "Visla 토큰이 잘못되었거나 만료되었습니다"
     },
     "account": {
       "section": "계정",

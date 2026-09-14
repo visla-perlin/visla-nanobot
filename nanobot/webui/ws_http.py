@@ -45,6 +45,7 @@ from nanobot.webui.file_preview import (
 from nanobot.webui.gateway_tokens import GatewayTokenStore, token_response_payload
 from nanobot.webui.http_utils import JSONResponseMetrics
 from nanobot.webui.http_utils import accepts_gzip as _accepts_gzip
+from nanobot.webui.http_utils import auth_header_secret as _auth_header_secret
 from nanobot.webui.http_utils import (
     case_insensitive_header as _case_insensitive_header,
 )
@@ -135,6 +136,12 @@ from nanobot.webui.transcript import (
     build_webui_thread_response,
     build_webui_trace_detail_response,
     webui_transcript_revision,
+)
+from nanobot.webui.visla_auth import (
+    VislaAttemptLimiter,
+    VislaAuthRejectedError,
+    VislaAuthUnavailableError,
+    validate_visla_token,
 )
 from nanobot.webui.workspaces import WebUIWorkspaceController
 
@@ -379,6 +386,7 @@ class GatewayHTTPHandler:
         self.recovery_action = recovery_action
         self._skill_install_lock = asyncio.Lock()
         self._folder_picker_lock = asyncio.Lock()
+        self._visla_attempts = VislaAttemptLimiter()
         self.cron_service = cron_service
         self.local_trigger_store = local_trigger_store
         self.cron_pending_job_ids = cron_pending_job_ids
@@ -559,6 +567,13 @@ class GatewayHTTPHandler:
         request: WsRequest,
         got: str,
     ) -> Any | None:
+        # Visla SSO exchange — unauthenticated by design: it mints one-shot
+        # bootstrap credentials after validating the token upstream.
+        if got == "/webui/auth/visla":
+            return await self._handle_visla_auth(connection, request)
+        if got == "/webui/auth/methods":
+            return self._handle_visla_methods()
+
         # Token issue endpoint
         if self.config.token_issue_path:
             issue_expected = _normalize_config_path(self.config.token_issue_path)
@@ -672,11 +687,21 @@ class GatewayHTTPHandler:
             request.headers,
             self.config,
         )
+        supplied_credential = _auth_header_secret(request.headers)
+        visla_exchange_ok = (
+            self.tokens.peek_issued_token_audience(supplied_credential) == "bootstrap"
+        )
+        if visla_exchange_ok and not terminal_probe:
+            # One-shot: the Visla-minted exchange token is consumed by a real
+            # bootstrap and cannot be replayed (terminal probes only peek).
+            self.tokens.take_issued_token_audience(supplied_credential)
         if not is_proxy_authenticated:
             if secret:
-                if not _issue_route_secret_matches(request.headers, secret):
+                if not _issue_route_secret_matches(
+                    request.headers, secret,
+                ) and not visla_exchange_ok:
                     return _http_error(401, "Unauthorized")
-            elif not is_local_browser:
+            elif not is_local_browser and not visla_exchange_ok:
                 return _http_error(403, "bootstrap is localhost-only")
 
         terminal = {"protocolVersion": 1, "gatewayId": self.tokens.instance_id}
@@ -700,7 +725,7 @@ class GatewayHTTPHandler:
             }
             return _http_json_response(payload, extra_headers=_NO_STORE_HEADERS)
 
-        api_token_allowed = bool(secret) or is_local_browser
+        api_token_allowed = bool(secret) or is_local_browser or visla_exchange_ok
         if not self.tokens.can_issue(include_api_token=api_token_allowed):
             return _http_response(
                 json.dumps({"error": "too many outstanding tokens"}).encode("utf-8"),
@@ -750,6 +775,63 @@ class GatewayHTTPHandler:
         scheme = "wss" if secure else "ws"
         expected_path = _normalize_config_path(self.config.path)
         return f"{scheme}://{host}{expected_path}"
+
+    # -- Visla SSO exchange ---------------------------------------------------
+
+    def _handle_visla_methods(self) -> Response:
+        """Report which login methods the WebUI may offer (unauthenticated)."""
+        return _http_json_response(
+            {"visla": bool(self.config.visla_auth_enabled)},
+            extra_headers=_NO_STORE_HEADERS,
+        )
+
+    def _visla_peer(self, connection: Any) -> str:
+        addr = getattr(connection, "remote_address", None)
+        if isinstance(addr, tuple) and addr:
+            host = cast(Any, addr[0])
+            return str(host)
+        if isinstance(addr, str) and addr:
+            return addr
+        return "unknown"
+
+    async def _handle_visla_auth(self, connection: Any, request: Any) -> Response:
+        """Exchange a valid Visla user token for a one-shot bootstrap token."""
+        if not self.config.visla_auth_enabled:
+            return _http_error(404, "Not Found")
+        peer = self._visla_peer(connection)
+        if not self._visla_attempts.allow(peer):
+            return _http_error(429, "Too Many Requests")
+        visla_token = _auth_header_secret(request.headers)
+        if not visla_token:
+            return _http_error(401, "Unauthorized")
+        try:
+            user = await validate_visla_token(
+                self.config.visla_current_user_url,
+                visla_token,
+            )
+        except VislaAuthRejectedError:
+            self._log.warning("visla auth rejected peer={}", peer)
+            return _http_error(401, "Unauthorized")
+        except VislaAuthUnavailableError as exc:
+            self._log.error("visla auth unavailable peer={}: {}", peer, exc)
+            return _http_error(502, "Upstream Unavailable")
+        if not self.tokens.can_issue():
+            self._log.error(
+                "too many outstanding issued tokens ({}), rejecting visla exchange",
+                len(self.tokens.issued_tokens),
+            )
+            return _http_json_response(
+                {"error": "too many outstanding tokens"},
+                status=429,
+                extra_headers=_NO_STORE_HEADERS,
+            )
+        ttl_s = self.config.visla_exchange_ttl_s
+        exchange = self.tokens.issue_token(ttl_s, audience="bootstrap")
+        self._log.info("visla auth ok user={} ({})", user.user_name, user.email)
+        return _http_json_response(
+            token_response_payload(exchange, ttl_s),
+            extra_headers=_NO_STORE_HEADERS,
+        )
 
     def _mcp_oauth_redirect_uri(self, request: WsRequest) -> str:
         """Derive the browser callback from the same public origin as WebSocket bootstrap."""

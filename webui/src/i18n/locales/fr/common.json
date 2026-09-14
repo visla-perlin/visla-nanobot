@@ -20,7 +20,12 @@
       "hidePassword": "Masquer le mot de passe",
       "submit": "Se connecter",
       "required": "Saisissez le mot de passe",
-      "invalid": "Mot de passe incorrect"
+      "invalid": "Mot de passe incorrect",
+      "vislaDivider": "ou",
+      "vislaLabel": "Jeton Visla",
+      "vislaSubmit": "Se connecter",
+      "vislaRequired": "Collez votre jeton Visla",
+      "vislaInvalid": "Jeton Visla invalide ou expiré"
     },
     "account": {
       "section": "Compte",

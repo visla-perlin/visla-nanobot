@@ -20,7 +20,12 @@
       "hidePassword": "Hide password",
       "submit": "Connect",
       "required": "Enter password",
-      "invalid": "Incorrect password"
+      "invalid": "Incorrect password",
+      "vislaDivider": "or",
+      "vislaLabel": "Visla token",
+      "vislaSubmit": "Sign in",
+      "vislaRequired": "Paste your Visla token",
+      "vislaInvalid": "Invalid or expired Visla token"
     },
     "account": {
       "section": "Account",

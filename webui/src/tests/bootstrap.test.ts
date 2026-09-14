@@ -1,9 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  BootstrapAuthRequiredError,
+  clearSavedVislaToken,
   consumeUrlBootstrapSecret,
+  consumeUrlVislaToken,
   deriveWsUrl,
+  exchangeVislaToken,
+  fetchAuthMethods,
   fetchBootstrap,
+  loadSavedVislaToken,
+  saveVislaToken,
 } from "@/lib/bootstrap";
 
 describe("bootstrap helpers", () => {
@@ -98,5 +105,99 @@ describe("bootstrap helpers", () => {
 
     expect(consumeUrlBootstrapSecret()).toBe("s3cret");
     expect(window.location.hash).toBe("#/settings?section=models");
+  });
+});
+
+describe("visla auth helpers", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    clearSavedVislaToken();
+  });
+
+  it("persists the visla token across reloads until cleared", () => {
+    expect(loadSavedVislaToken()).toBe("");
+    saveVislaToken("visla-jwt");
+    expect(loadSavedVislaToken()).toBe("visla-jwt");
+    clearSavedVislaToken();
+    expect(loadSavedVislaToken()).toBe("");
+  });
+
+  it("exchanges a visla token via the X-Nanobot-Auth header", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ token: "one-shot", expires_in: 120 }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(exchangeVislaToken("visla-jwt", "", 1_000)).resolves.toMatchObject({
+      token: "one-shot",
+      expires_in: 120,
+    });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/webui/auth/visla");
+    // The gateway's embedded HTTP layer (websockets) only accepts GET.
+    expect(init.method ?? "GET").toBe("GET");
+    expect((init.headers as Record<string, string>)["X-Nanobot-Auth"]).toBe("visla-jwt");
+  });
+
+  it("raises BootstrapAuthRequiredError when the visla token is rejected", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 401 })),
+    );
+    await expect(exchangeVislaToken("bad")).rejects.toBeInstanceOf(BootstrapAuthRequiredError);
+  });
+
+  it("raises a plain error when the gateway cannot reach visla", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 502 })),
+    );
+    await expect(exchangeVislaToken("visla-jwt")).rejects.toThrow("HTTP 502");
+  });
+
+  it("reports visla availability from the methods probe", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, json: async () => ({ visla: true }) })),
+    );
+    await expect(fetchAuthMethods()).resolves.toEqual({ visla: true });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 404 })),
+    );
+    await expect(fetchAuthMethods()).resolves.toEqual({ visla: false });
+  });
+
+  it("reports no methods when the methods probe fails entirely", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("network down");
+      }),
+    );
+    await expect(fetchAuthMethods()).resolves.toEqual({ visla: false });
+  });
+
+  it("consumes visla tokens from the plain query string", () => {
+    window.history.replaceState(null, "", "/?visla_token=visla-jwt&tab=1");
+    expect(consumeUrlVislaToken()).toBe("visla-jwt");
+    expect(window.location.search).toBe("?tab=1");
+    expect(consumeUrlVislaToken()).toBe("");
+  });
+
+  it("consumes visla tokens from the hash-fragment query", () => {
+    window.history.replaceState(null, "", "/#/?visla_token=visla-jwt");
+    expect(consumeUrlVislaToken()).toBe("visla-jwt");
+    expect(window.location.hash).toBe("#/");
+    expect(consumeUrlVislaToken()).toBe("");
+  });
+
+  it("leaves the URL untouched when it has no visla token", () => {
+    window.history.replaceState(null, "", "/?tab=1#/settings");
+    expect(consumeUrlVislaToken()).toBe("");
+    expect(window.location.search).toBe("?tab=1");
+    expect(window.location.hash).toBe("#/settings");
   });
 });

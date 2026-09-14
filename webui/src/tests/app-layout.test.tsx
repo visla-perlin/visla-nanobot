@@ -232,6 +232,11 @@ vi.mock("@/lib/bootstrap", () => ({
   loadSavedSecret: vi.fn(() => ""),
   saveSecret: vi.fn(),
   clearSavedSecret: vi.fn(),
+  loadSavedVislaToken: vi.fn(() => ""),
+  saveVislaToken: vi.fn(),
+  clearSavedVislaToken: vi.fn(),
+  exchangeVislaToken: vi.fn().mockResolvedValue({ token: "exchange-tok", expires_in: 120 }),
+  fetchAuthMethods: vi.fn().mockResolvedValue({ visla: false }),
 }));
 
 vi.mock("@/lib/nanobot-client", async (importOriginal) => {

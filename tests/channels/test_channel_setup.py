@@ -57,6 +57,9 @@ INTERNAL_CHANNEL_FIELDS = {
         "tokenTtlS",
         "trustedProxyAuth",
         "unixSocketPath",
+        "vislaAuthEnabled",
+        "vislaCurrentUserUrl",
+        "vislaExchangeTtlS",
         "websocketRequiresToken",
     },
 }

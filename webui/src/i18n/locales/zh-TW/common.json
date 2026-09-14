@@ -20,7 +20,12 @@
       "hidePassword": "隱藏密碼",
       "submit": "連線",
       "required": "請輸入密碼",
-      "invalid": "密碼不正確，請重試"
+      "invalid": "密碼不正確，請重試",
+      "vislaDivider": "或",
+      "vislaLabel": "Visla 權杖",
+      "vislaSubmit": "登入",
+      "vislaRequired": "貼上你的 Visla 權杖",
+      "vislaInvalid": "Visla 權杖無效或已過期"
     },
     "account": {
       "section": "帳戶",

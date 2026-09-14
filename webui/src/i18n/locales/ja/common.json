@@ -20,7 +20,12 @@
       "hidePassword": "パスワードを隠す",
       "submit": "接続",
       "required": "パスワードを入力",
-      "invalid": "パスワードが違います"
+      "invalid": "パスワードが違います",
+      "vislaDivider": "または",
+      "vislaLabel": "Visla トークン",
+      "vislaSubmit": "サインイン",
+      "vislaRequired": "Visla トークンを貼り付けてください",
+      "vislaInvalid": "Visla トークンが無効または期限切れです"
     },
     "account": {
       "section": "アカウント",

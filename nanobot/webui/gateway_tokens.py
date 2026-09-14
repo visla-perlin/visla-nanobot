@@ -12,7 +12,7 @@ from websockets.http11 import Request as WsRequest
 
 from nanobot.webui.http_utils import bearer_token, parse_query, query_first
 
-IssuedTokenAudience = Literal["client", "webui"]
+IssuedTokenAudience = Literal["client", "webui", "bootstrap"]
 
 
 @dataclass
@@ -64,6 +64,19 @@ class GatewayTokenStore:
         expiry = time.monotonic() + float(ttl_s)
         self.api_tokens[token_value] = expiry
         return token_value
+
+    def peek_issued_token_audience(
+        self,
+        token_value: str | None,
+    ) -> IssuedTokenAudience | None:
+        """Return the token's audience without consuming it, or None if unknown/expired."""
+        if not token_value:
+            return None
+        self._purge_expired_issued_tokens()
+        expiry = self.issued_tokens.get(token_value)
+        if expiry is None or time.monotonic() > expiry:
+            return None
+        return self.issued_token_audiences.get(token_value, "client")
 
     def take_issued_token_audience(
         self,

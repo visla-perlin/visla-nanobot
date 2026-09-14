@@ -20,7 +20,12 @@
       "hidePassword": "Ocultar contraseña",
       "submit": "Conectar",
       "required": "Introduce la contraseña",
-      "invalid": "Contraseña incorrecta"
+      "invalid": "Contraseña incorrecta",
+      "vislaDivider": "o",
+      "vislaLabel": "Token de Visla",
+      "vislaSubmit": "Iniciar sesión",
+      "vislaRequired": "Pega tu token de Visla",
+      "vislaInvalid": "Token de Visla no válido o caducado"
     },
     "account": {
       "section": "Cuenta",

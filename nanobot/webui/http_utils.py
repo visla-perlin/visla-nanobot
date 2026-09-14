@@ -311,6 +311,15 @@ def bearer_token(headers: Any) -> str | None:
     return None
 
 
+def auth_header_secret(headers: Any) -> str:
+    """Return the credential from ``Authorization: Bearer`` or ``X-Nanobot-Auth``."""
+    bearer = bearer_token(headers)
+    if bearer:
+        return bearer
+    header_token = headers.get("X-Nanobot-Auth") or headers.get("x-nanobot-auth")
+    return header_token.strip() if header_token else ""
+
+
 def issue_route_secret_matches(headers: Any, configured_secret: str) -> bool:
     if not configured_secret:
         return True

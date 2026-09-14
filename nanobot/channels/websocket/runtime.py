@@ -56,6 +56,7 @@ from nanobot.webui.outbound_wire import (
 )
 from nanobot.webui.session_identity import is_valid_webui_chat_id
 from nanobot.webui.transcript import WEBUI_TRANSCRIPT_INCOMPLETE_KEY
+from nanobot.webui.visla_auth import DEFAULT_VISLA_CURRENT_USER_URL
 from nanobot.webui.websocket_logging import websockets_server_logger
 
 if TYPE_CHECKING:
@@ -185,6 +186,13 @@ class WebSocketConfig(Base):
       blocking ``urllib`` or synchronous ``httpx`` from inside a coroutine.
     - ``token_issue_secret``: If non-empty, token requests must send ``Authorization: Bearer <secret>`` or
       ``X-Nanobot-Auth: <secret>``.
+    - ``visla_auth_enabled``: If True, the WebUI login page additionally accepts a Visla user token.
+      ``GET /webui/auth/visla`` validates the token (sent in ``X-Nanobot-Auth``) against
+      ``visla_current_user_url`` and, on success, returns a one-shot short-lived bootstrap token that
+      ``/webui/bootstrap`` accepts in place of the static secret. The static secret never reaches the
+      browser.
+    - ``visla_current_user_url``: Visla endpoint used to validate user tokens.
+    - ``visla_exchange_ttl_s``: Lifetime of the one-shot bootstrap token minted by the Visla exchange.
     - ``public_ws_url``: Optional public WebSocket endpoint returned by WebUI bootstrap instead of
       deriving one from proxy request headers. Its path must match ``path``.
     - ``websocket_requires_token``: If True, the handshake must include a valid token (static or issued and not expired).
@@ -202,6 +210,9 @@ class WebSocketConfig(Base):
     token: str = ""
     token_issue_path: str = ""
     token_issue_secret: str = ""
+    visla_auth_enabled: bool = False
+    visla_current_user_url: str = DEFAULT_VISLA_CURRENT_USER_URL
+    visla_exchange_ttl_s: int = Field(default=120, ge=10, le=3600)
     trusted_proxy_auth: TrustedProxyAuthConfig | None = None
     token_ttl_s: int = Field(default=300, ge=30, le=86_400)
     websocket_requires_token: bool = True
@@ -246,6 +257,17 @@ class WebSocketConfig(Base):
         if not value.startswith("/"):
             raise ValueError('token_issue_path must start with "/"')
         return _normalize_config_path(value)
+
+    @field_validator("visla_current_user_url")
+    @classmethod
+    def visla_current_user_url_format(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            return DEFAULT_VISLA_CURRENT_USER_URL
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("visla_current_user_url must be an absolute http(s) URL")
+        return value
 
     @field_validator("public_ws_url")
     @classmethod

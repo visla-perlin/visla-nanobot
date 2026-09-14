@@ -20,7 +20,12 @@
       "hidePassword": "Sembunyikan kata sandi",
       "submit": "Hubungkan",
       "required": "Masukkan kata sandi",
-      "invalid": "Kata sandi salah"
+      "invalid": "Kata sandi salah",
+      "vislaDivider": "atau",
+      "vislaLabel": "Token Visla",
+      "vislaSubmit": "Masuk",
+      "vislaRequired": "Tempel token Visla Anda",
+      "vislaInvalid": "Token Visla tidak valid atau kedaluwarsa"
     },
     "account": {
       "section": "Akun",

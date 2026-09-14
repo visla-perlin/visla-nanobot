@@ -54,11 +54,17 @@ import { cn } from "@/lib/utils";
 import {
   BootstrapAuthRequiredError,
   clearSavedSecret,
+  clearSavedVislaToken,
   consumeUrlBootstrapSecret,
+  consumeUrlVislaToken,
   deriveWsUrl,
+  exchangeVislaToken,
+  fetchAuthMethods,
   fetchBootstrap,
   loadSavedSecret,
+  loadSavedVislaToken,
   saveSecret,
+  saveVislaToken,
 } from "@/lib/bootstrap";
 import { displayTitle, sortSessions } from "@/lib/chat-groups";
 import { deriveTitle } from "@/lib/format";
@@ -97,7 +103,7 @@ import {
 type BootState =
   | { status: "loading" }
   | { status: "error"; message: string }
-  | { status: "auth"; failed?: boolean }
+  | { status: "auth"; failed?: boolean; failedViaVisla?: boolean }
   | {
       status: "ready";
       client: NanobotClient;
@@ -351,10 +357,14 @@ function tokenRefreshDelayMs(expiresAt: number): number {
 
 function AuthForm({
   failed,
+  failedViaVisla,
   onSecret,
+  onVislaToken,
 }: {
   failed: boolean;
+  failedViaVisla?: boolean;
   onSecret: (secret: string) => void;
+  onVislaToken: (token: string) => void;
 }) {
   const { t } = useTranslation();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -362,15 +372,41 @@ function AuthForm({
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [validationError, setValidationError] = useState<"required" | "invalid" | null>(
-    failed ? "invalid" : null,
+    failed && !failedViaVisla ? "invalid" : null,
+  );
+  const [vislaEnabled, setVislaEnabled] = useState(false);
+  const [vislaValue, setVislaValue] = useState("");
+  const [vislaError, setVislaError] = useState<"required" | "invalid" | null>(
+    failed && failedViaVisla ? "invalid" : null,
   );
   const errorMessage = validationError ? t(`app.auth.${validationError}`) : null;
+  const vislaErrorMessage = vislaError
+    ? t(`app.auth.visla${vislaError === "required" ? "Required" : "Invalid"}`)
+    : null;
 
   useEffect(() => {
     if (!validationError) return;
     const timeout = window.setTimeout(() => setValidationError(null), 3_000);
     return () => window.clearTimeout(timeout);
   }, [validationError]);
+
+  useEffect(() => {
+    if (!vislaError) return;
+    const timeout = window.setTimeout(() => setVislaError(null), 3_000);
+    return () => window.clearTimeout(timeout);
+  }, [vislaError]);
+
+  useEffect(() => {
+    let mounted = true;
+    fetchAuthMethods()
+      .then((methods) => {
+        if (mounted) setVislaEnabled(methods.visla);
+      })
+      .catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -383,6 +419,18 @@ function AuthForm({
     }
     setSubmitting(true);
     onSecret(secret);
+  };
+
+  const handleVislaSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const token = vislaValue.trim();
+    if (!token) {
+      setVislaValue("");
+      setVislaError("required");
+      return;
+    }
+    setVislaError(null);
+    onVislaToken(token);
   };
 
   return (
@@ -468,6 +516,57 @@ function AuthForm({
               </p>
             ) : null}
           </form>
+          {vislaEnabled ? (
+            <>
+              <div
+                role="separator"
+                className="mt-6 flex items-center gap-3 text-xs text-muted-foreground"
+              >
+                <span className="h-px flex-1 bg-border" />
+                <span>{t("app.auth.vislaDivider")}</span>
+                <span className="h-px flex-1 bg-border" />
+              </div>
+              <form onSubmit={handleVislaSubmit} className="mt-4">
+                <div className="relative">
+                  <Input
+                    id="webui-visla-token"
+                    name="webui-visla-token"
+                    aria-label={t("app.auth.vislaLabel")}
+                    type="password"
+                    autoComplete="off"
+                    value={vislaValue}
+                    onChange={(e) => {
+                      setVislaValue(e.target.value);
+                      setVislaError(null);
+                    }}
+                    aria-invalid={vislaError ? true : undefined}
+                    aria-describedby={vislaError ? "webui-visla-error" : undefined}
+                    placeholder={vislaErrorMessage ?? undefined}
+                    className={cn(
+                      "h-12 rounded-full border-foreground/15 bg-muted/30 px-4 pr-24 text-base",
+                      vislaError &&
+                        "placeholder:text-[13px] placeholder:text-red-600 dark:placeholder:text-red-400",
+                    )}
+                  />
+                  <Button
+                    type="submit"
+                    variant="ghost"
+                    size="icon"
+                    aria-label={t("app.auth.vislaSubmit")}
+                    title={t("app.auth.vislaSubmit")}
+                    className="absolute right-1 top-1/2 h-10 w-10 -translate-y-1/2 rounded-full"
+                  >
+                    <ArrowRight className="h-4 w-4" strokeWidth={1.75} aria-hidden />
+                  </Button>
+                </div>
+                {vislaErrorMessage ? (
+                  <p id="webui-visla-error" role="alert" className="sr-only">
+                    {vislaErrorMessage}
+                  </p>
+                ) : null}
+              </form>
+            </>
+          ) : null}
           <Disclosure
             className="mt-4"
             summaryClassName="flex min-h-11 items-center justify-center gap-1.5 rounded-compact text-[13px] text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
@@ -878,10 +977,21 @@ export default function App() {
   const { t } = useTranslation();
   const [state, setState] = useState<BootState>({ status: "loading" });
   const bootstrapSecretRef = useRef("");
+  const vislaTokenRef = useRef("");
+
+  const resolveBootstrapSecret = useCallback(async (): Promise<string> => {
+    // In Visla mode the bootstrap credential is a one-shot token minted per
+    // attempt; the durable browser-side credential is the Visla token itself.
+    if (vislaTokenRef.current) {
+      const exchange = await exchangeVislaToken(vislaTokenRef.current);
+      return exchange.token;
+    }
+    return bootstrapSecretRef.current;
+  }, []);
 
   const refreshReadyClient = useCallback(
     async (client: NanobotClient, fallbackSurface: RuntimeSurface) => {
-      const boot = await fetchBootstrap("", bootstrapSecretRef.current);
+      const boot = await fetchBootstrap("", await resolveBootstrapSecret());
       const url = deriveWsUrl(boot.ws_path, boot.token, boot.ws_url);
       const runtimeSurface = resolveRuntimeSurface(boot.runtime_surface, fallbackSurface);
       const runtimeHost = createRuntimeHost(runtimeSurface, boot.runtime_capabilities);
@@ -908,18 +1018,21 @@ export default function App() {
       );
       return { token: boot.api_token ?? "", url };
     },
-    [],
+    [resolveBootstrapSecret],
   );
 
-  const bootstrapWithSecret = useCallback(
-    (secret: string) => {
+  const startBootstrap = useCallback(
+    (getSecret: () => Promise<string>, persistCredential: () => void) => {
       let cancelled = false;
       (async () => {
         setState({ status: "loading" });
+        let secret = "";
         try {
+          secret = await getSecret();
+          if (cancelled) return;
           const boot = await fetchBootstrap("", secret);
           if (cancelled) return;
-          if (secret) saveSecret(secret);
+          persistCredential();
           const url = deriveWsUrl(boot.ws_path, boot.token, boot.ws_url);
           const runtimeSurface = resolveRuntimeSurface(boot.runtime_surface, "browser");
           const runtimeHost = createRuntimeHost(runtimeSurface, boot.runtime_capabilities);
@@ -968,6 +1081,53 @@ export default function App() {
     [refreshReadyClient],
   );
 
+  const bootstrapWithSecret = useCallback(
+    (secret: string) => {
+      return startBootstrap(
+        async () => secret,
+        () => {
+          if (secret) saveSecret(secret);
+        },
+      );
+    },
+    [startBootstrap],
+  );
+
+  const bootstrapWithVisla = useCallback(
+    (vislaToken: string) => {
+      let cancelled = false;
+      (async () => {
+        setState({ status: "loading" });
+        try {
+          const exchange = await exchangeVislaToken(vislaToken);
+          if (cancelled) return;
+          saveVislaToken(vislaToken);
+          vislaTokenRef.current = vislaToken;
+          startBootstrap(
+            async () => exchange.token,
+            () => {
+              // The minted token is one-shot; only the Visla token persists.
+            },
+          );
+        } catch (e) {
+          if (cancelled) return;
+          if (isBootstrapAuthRequired(e)) {
+            setState({ status: "auth", failed: true, failedViaVisla: true });
+          } else {
+            setState({
+              status: "error",
+              message: e instanceof Error ? e.message : String(e),
+            });
+          }
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    },
+    [startBootstrap],
+  );
+
   useEffect(() => {
     if (state.status !== "ready" || state.tokenExpiresAt === null) return;
     const client = state.client;
@@ -976,7 +1136,11 @@ export default function App() {
         await refreshReadyClient(client, state.runtimeSurface);
       } catch (e) {
         if (isBootstrapAuthRequired(e)) {
-          setState({ status: "auth", failed: !!bootstrapSecretRef.current });
+          setState({
+            status: "auth",
+            failed: !!(bootstrapSecretRef.current || vislaTokenRef.current),
+            failedViaVisla: !!vislaTokenRef.current,
+          });
         }
       }
     }, tokenRefreshDelayMs(state.tokenExpiresAt));
@@ -984,9 +1148,14 @@ export default function App() {
   }, [refreshReadyClient, state]);
 
   useEffect(() => {
+    const urlVisla = consumeUrlVislaToken();
+    if (urlVisla) return bootstrapWithVisla(urlVisla);
     const saved = consumeUrlBootstrapSecret() || loadSavedSecret();
-    return bootstrapWithSecret(saved);
-  }, [bootstrapWithSecret]);
+    if (saved) return bootstrapWithSecret(saved);
+    const savedVisla = loadSavedVislaToken();
+    if (savedVisla) return bootstrapWithVisla(savedVisla);
+    return bootstrapWithSecret("");
+  }, [bootstrapWithSecret, bootstrapWithVisla]);
 
   if (state.status === "loading") {
     return (
@@ -1007,7 +1176,9 @@ export default function App() {
     return (
       <AuthForm
         failed={!!state.failed}
+        failedViaVisla={!!state.failedViaVisla}
         onSecret={(s) => bootstrapWithSecret(s)}
+        onVislaToken={(token) => bootstrapWithVisla(token)}
       />
     );
   }
@@ -1036,6 +1207,9 @@ export default function App() {
       state.client.close();
     }
     clearSavedSecret();
+    clearSavedVislaToken();
+    bootstrapSecretRef.current = "";
+    vislaTokenRef.current = "";
     setState({ status: "auth" });
   };
 
