@@ -1,0 +1,95 @@
+# Parameterized multi-environment Compose file for visla-nanobot.
+#
+# Driven by deploy/run-docker.sh, which sources deploy/envs/<env>.env and
+# exports these variables before invoking docker compose:
+#
+#   NANOBOT_DATA_DIR          host directory bind-mounted as the data dir
+#   NANOBOT_GATEWAY_PORT      host port for the gateway /health endpoint
+#   NANOBOT_WEBSOCKET_PORT    host port for the WebUI / WebSocket channel
+#   NANOBOT_API_PORT          host port for the OpenAI-compatible API
+#   NANOBOT_CONTAINER_PREFIX  container name prefix
+#   VISLA_CURRENT_USER_URL    admin-api current-user URL (Visla SSO validation)
+#   VISLA_ADMIN_API_BASE_URL  admin-api base URL (forwarded to skills)
+#
+# The ":?" markers fail `docker compose` immediately when a variable is unset,
+# so a half-configured environment can never silently start.
+#
+# Container-internal ports stay fixed (18790 / 8765 / 8900); only the host side
+# is remapped per environment so dev and prod coexist on one host.
+
+x-common-config: &common-config
+  build:
+    context: ..
+    dockerfile: Dockerfile
+    args:
+      NANOBOT_CHANNELS: ${NANOBOT_CHANNELS:-whatsapp}
+  volumes:
+    # Per-environment data dir (config.json + runtime state).
+    - ${NANOBOT_DATA_DIR:?deploy/envs}:/home/nanobot/.nanobot
+    # Shared workspace (skills / memory / cron), kept outside the data dir so
+    # every environment mounts the same one. The mount point nests inside the
+    # data-dir mount above; Docker resolves the deeper path first.
+    - ${NANOBOT_WORKSPACE:?deploy/envs}:/home/nanobot/.nanobot/workspace
+  environment:
+    VISLA_CURRENT_USER_URL: ${VISLA_CURRENT_USER_URL:?deploy/envs}
+    VISLA_ADMIN_API_BASE_URL: ${VISLA_ADMIN_API_BASE_URL:?deploy/envs}
+  cap_drop:
+    - ALL
+  # Entrypoint uses these to fix bind-mount ownership and drop to the nanobot
+  # user (mirrors the root docker-compose.yml).
+  cap_add:
+    - CHOWN
+    - SETGID
+    - SETUID
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  nanobot-gateway:
+    <<: *common-config
+    container_name: ${NANOBOT_CONTAINER_PREFIX:?}-gateway
+    command: ["gateway"]
+    restart: unless-stopped
+    ports:
+      # Gateway health endpoint: host loopback only (see docs/deployment.md).
+      - "127.0.0.1:${NANOBOT_GATEWAY_PORT:?}:18790"
+      # WebUI / WebSocket channel.
+      - "${NANOBOT_WEBSOCKET_PORT:?}:8765"
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+  nanobot-api:
+    <<: *common-config
+    container_name: ${NANOBOT_CONTAINER_PREFIX:?}-api
+    command:
+      - serve
+      - --host
+      - 0.0.0.0
+      - -w
+      - /home/nanobot/.nanobot/api-workspace
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${NANOBOT_API_PORT:?}:8900"
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+  nanobot-cli:
+    <<: *common-config
+    container_name: ${NANOBOT_CONTAINER_PREFIX:?}-cli
+    profiles:
+      - cli
+    command: ["status"]
+    stdin_open: true
+    tty: true

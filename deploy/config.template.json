@@ -1,0 +1,32 @@
+{
+  "gateway": {
+    "host": "127.0.0.1",
+    "port": __GATEWAY_PORT__
+  },
+  "agents": {
+    "defaults": {
+      "workspace": "__WORKSPACE__"
+    }
+  },
+  "channels": {
+    "websocket": {
+      "enabled": true,
+      "host": "__WS_HOST__",
+      "port": __WEBSOCKET_PORT__,
+      "tokenIssueSecret": "__TOKEN_ISSUE_SECRET__",
+      "websocketRequiresToken": true,
+      "vislaAuthEnabled": true,
+      "vislaCurrentUserUrl": "${VISLA_CURRENT_USER_URL}"
+    }
+  },
+  "tools": {
+    "restrictToWorkspace": true,
+    "webuiAllowRemotePackageInstall": false,
+    "exec": {
+      "allowedEnvKeys": [
+        "VISLA_ADMIN_API_BASE_URL",
+        "VISLA_CURRENT_USER_URL"
+      ]
+    }
+  }
+}
