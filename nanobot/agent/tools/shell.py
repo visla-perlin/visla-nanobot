@@ -20,7 +20,11 @@ from loguru import logger
 from pydantic import Field
 
 from nanobot.agent.tools.base import Tool, ToolResult, tool_parameters
-from nanobot.agent.tools.context import ToolContext, current_request_session_key
+from nanobot.agent.tools.context import (
+    ToolContext,
+    current_request_context,
+    current_request_session_key,
+)
 from nanobot.agent.tools.exec_session import (
     DEFAULT_EXEC_SESSION_MANAGER,
     DEFAULT_MAX_OUTPUT_CHARS,
@@ -765,7 +769,18 @@ class ExecTool(Tool):
         On Windows, ``cmd.exe`` has no login-profile mechanism, so a curated
         set of system variables (including PATH) is forwarded.  API keys and
         other secrets are still excluded.
+
+        ``VISLA_TOKEN`` is a deliberate exception when the request context
+        carries one: the conversing Visla user's JWT is injected so skill
+        subprocesses query admin-api as that user. It overrides any
+        deployment-static value passed via ``allowed_env_keys``.
         """
+        visla_token = ""
+        request_ctx = current_request_context()
+        if request_ctx is not None:
+            candidate = request_ctx.metadata.get("visla_token")
+            if isinstance(candidate, str) and candidate:
+                visla_token = candidate
         if _IS_WINDOWS:
             sr = os.environ.get("SYSTEMROOT", r"C:\Windows")
             env = {
@@ -790,6 +805,8 @@ class ExecTool(Tool):
                 val = os.environ.get(key)
                 if val is not None:
                     env[key] = val
+            if visla_token:
+                env["VISLA_TOKEN"] = visla_token
             return env
         home = os.environ.get("HOME", "/tmp")
         env = {
@@ -802,6 +819,8 @@ class ExecTool(Tool):
             val = os.environ.get(key)
             if val is not None:
                 env[key] = val
+        if visla_token:
+            env["VISLA_TOKEN"] = visla_token
         return env
 
     def _guard_command(

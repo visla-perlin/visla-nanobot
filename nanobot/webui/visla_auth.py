@@ -129,3 +129,56 @@ class VislaAttemptLimiter:
         for peer in stale:
             del self._attempts[peer]
         logger.debug("visla attempt limiter pruned {} stale peers", len(stale))
+
+
+class VislaTokenStore:
+    """In-memory registry of the latest Visla JWT per user id.
+
+    Used to inject the conversing user's credentials into skill subprocesses
+    (``VISLA_TOKEN``). Tokens never touch disk and are dropped on process
+    restart; users simply re-run the SSO exchange in that case. The entry TTL
+    is only a retention bound — the upstream JWT's own expiry remains the real
+    validity limit, and expired tokens surface as admin-api 3004/3005 to the
+    caller, prompting a fresh SSO exchange.
+    """
+
+    def __init__(self, max_users: int = 10_000, entry_ttl_s: float = 24 * 3600.0) -> None:
+        self.max_users = max_users
+        self.entry_ttl_s = entry_ttl_s
+        self._tokens: dict[str, tuple[str, float]] = {}
+
+    def put(self, user_id: str, token: str) -> None:
+        """Record (or rotate) the latest JWT for *user_id*."""
+        if not user_id or not token:
+            return
+        self._prune()
+        if len(self._tokens) >= self.max_users and user_id not in self._tokens:
+            logger.warning("visla token store full ({}), rejecting new entry", self.max_users)
+            return
+        self._tokens[user_id] = (token, time.monotonic())
+
+    def latest(self, user_id: str | None) -> str:
+        """Return the newest stored JWT for *user_id*, or "" when unknown/expired."""
+        if not user_id:
+            return ""
+        entry = self._tokens.get(user_id)
+        if entry is None:
+            return ""
+        token, stored_at = entry
+        if time.monotonic() - stored_at > self.entry_ttl_s:
+            self._tokens.pop(user_id, None)
+            return ""
+        return token
+
+    def clear(self) -> None:
+        self._tokens.clear()
+
+    def _prune(self) -> None:
+        now = time.monotonic()
+        stale = [
+            user_id
+            for user_id, (_, stored_at) in self._tokens.items()
+            if now - stored_at > self.entry_ttl_s
+        ]
+        for user_id in stale:
+            del self._tokens[user_id]

@@ -157,6 +157,9 @@ export function consumeUrlBootstrapSecret(): string {
 
 const URL_VISLA_TOKEN_PARAM = "visla_token";
 
+/** postMessage type used by iframe hosts to push a rotated Visla token. */
+export const VISLA_TOKEN_MESSAGE_TYPE = "nanobot:visla-token";
+
 /**
  * Read a Visla token from the URL — either ``?visla_token=`` in the plain
  * query string or in the hash-fragment query — and strip it from the address
@@ -199,6 +202,48 @@ export function consumeUrlVislaToken(): string {
     `${window.location.pathname}${window.location.search}${path}${rest ? `?${rest}` : ""}`,
   );
   return token;
+}
+
+/**
+ * Subscribe to runtime Visla-token rotations delivered via ``postMessage``
+ * (iframe hosts push ``{ type: "nanobot:visla-token", token }`` when the
+ * user's Visla session token rotates). Returns an unsubscriber.
+ */
+export function watchVislaTokenMessages(onToken: (token: string) => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  const handler = (event: MessageEvent) => {
+    const data = event.data as { type?: unknown; token?: unknown } | null;
+    if (
+      data !== null &&
+      typeof data === "object" &&
+      data.type === VISLA_TOKEN_MESSAGE_TYPE &&
+      typeof data.token === "string" &&
+      data.token.trim()
+    ) {
+      onToken(data.token.trim());
+    }
+  };
+  window.addEventListener("message", handler);
+  return () => window.removeEventListener("message", handler);
+}
+
+/**
+ * Watch for Visla tokens arriving via URL rotation after initial load
+ * (``popstate`` / ``hashchange`` re-runs the same extraction used at boot).
+ * Returns an unsubscriber.
+ */
+export function watchUrlVislaToken(onToken: (token: string) => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  const handler = () => {
+    const token = consumeUrlVislaToken();
+    if (token) onToken(token);
+  };
+  window.addEventListener("popstate", handler);
+  window.addEventListener("hashchange", handler);
+  return () => {
+    window.removeEventListener("popstate", handler);
+    window.removeEventListener("hashchange", handler);
+  };
 }
 
 /**

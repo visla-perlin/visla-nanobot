@@ -11,6 +11,7 @@ from typing import Any, Literal
 from websockets.http11 import Request as WsRequest
 
 from nanobot.webui.http_utils import bearer_token, parse_query, query_first
+from nanobot.webui.visla_auth import VislaTokenStore
 
 IssuedTokenAudience = Literal["client", "webui", "bootstrap"]
 
@@ -23,7 +24,9 @@ class GatewayTokenStore:
     instance_id: str = field(default_factory=lambda: str(uuid.uuid4()), init=False)
     issued_tokens: dict[str, float] = field(default_factory=dict)
     issued_token_audiences: dict[str, IssuedTokenAudience] = field(default_factory=dict)
+    issued_visla_users: dict[str, str] = field(default_factory=dict)
     api_tokens: dict[str, float] = field(default_factory=dict)
+    visla_tokens: VislaTokenStore = field(default_factory=VislaTokenStore)
 
     def check_api_token(self, request: WsRequest) -> bool:
         self._purge_expired_api_tokens()
@@ -52,11 +55,14 @@ class GatewayTokenStore:
         ttl_s: int | float,
         *,
         audience: IssuedTokenAudience = "client",
+        visla_user_id: str | None = None,
     ) -> str:
         token_value = f"nbwt_{secrets.token_urlsafe(32)}"
         expiry = time.monotonic() + float(ttl_s)
         self.issued_tokens[token_value] = expiry
         self.issued_token_audiences[token_value] = audience
+        if visla_user_id:
+            self.issued_visla_users[token_value] = visla_user_id
         return token_value
 
     def issue_api_token(self, ttl_s: int | float) -> str:
@@ -94,10 +100,25 @@ class GatewayTokenStore:
             return None
         return audience
 
+    def take_issued_visla_user(self, token_value: str | None) -> str | None:
+        """Pop the Visla user id bound to an unexpired issued token, or None."""
+        if not token_value:
+            return None
+        self._purge_expired_issued_tokens()
+        user_id = self.issued_visla_users.pop(token_value, None)
+        if user_id is None:
+            return None
+        expiry = self.issued_tokens.get(token_value)
+        if expiry is None or time.monotonic() > expiry:
+            return None
+        return user_id
+
     def clear(self) -> None:
         self.issued_tokens.clear()
         self.issued_token_audiences.clear()
+        self.issued_visla_users.clear()
         self.api_tokens.clear()
+        self.visla_tokens.clear()
 
     def _purge_expired_api_tokens(self) -> None:
         now = time.monotonic()
@@ -111,6 +132,7 @@ class GatewayTokenStore:
             if now > expiry:
                 self.issued_tokens.pop(token_key, None)
                 self.issued_token_audiences.pop(token_key, None)
+                self.issued_visla_users.pop(token_key, None)
 
 
 def token_response_payload(token: str, expires_in: Any) -> dict[str, Any]:

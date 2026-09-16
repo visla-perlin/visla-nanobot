@@ -48,6 +48,7 @@ class WebUIGatewayEndpoint:
         self._http = http
         self._tokens = tokens
         self.webui_connections: set[ServerConnection] = set()
+        self.connection_visla_users: dict[ServerConnection, str] = {}
 
     async def process_request(
         self,
@@ -105,16 +106,31 @@ class WebUIGatewayEndpoint:
 
     def consume_issued_token(self, connection: ServerConnection, token: str) -> bool:
         """Consume one issued token and record its WebUI audience when present."""
+        visla_user = self._tokens.take_issued_visla_user(token)
         audience = self._tokens.take_issued_token_audience(token)
         if audience == "webui":
             self.webui_connections.add(connection)
+        if visla_user:
+            # Bind the connection to the Visla user that exchanged this
+            # bootstrap token; per-turn skill subprocesses then receive that
+            # user's latest JWT as VISLA_TOKEN.
+            self.connection_visla_users[connection] = visla_user
         return audience is not None
+
+    def visla_token_for(self, connection: ServerConnection) -> str:
+        """Return the conversing user's latest Visla JWT for this connection ("" if unbound)."""
+        user_id = self.connection_visla_users.get(connection)
+        if not user_id:
+            return ""
+        return self._tokens.visla_tokens.latest(user_id)
 
     def is_webui_connection(self, connection: ServerConnection) -> bool:
         return connection in self.webui_connections
 
     def discard_connection(self, connection: ServerConnection) -> None:
         self.webui_connections.discard(connection)
+        self.connection_visla_users.pop(connection, None)
 
     def clear(self) -> None:
         self.webui_connections.clear()
+        self.connection_visla_users.clear()

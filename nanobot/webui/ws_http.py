@@ -157,8 +157,7 @@ def _quoted_etag(revision: str) -> str:
 
 def _etag_matches(value: str, etag: str) -> bool:
     return any(
-        candidate.strip().removeprefix("W/") in {"*", etag}
-        for candidate in value.split(",")
+        candidate.strip().removeprefix("W/") in {"*", etag} for candidate in value.split(",")
     )
 
 
@@ -170,6 +169,7 @@ class _WebUIThreadDiagnostics:
     build_ms: float = 0.0
     total_ms: float = 0.0
     event_loop_lag_ms: float = 0.0
+
 
 _WEBUI_MUTATION_PATHS = {
     "automation.enable": "/api/webui/automations/enable",
@@ -243,13 +243,13 @@ _WEBUI_CHANNEL_CONNECT_ACTIONS = {
 # (module-import time) so all callers of mimetypes.guess_type() in this process
 # benefit, regardless of host registry configuration.
 _MIME_FIXES: dict[str, str] = {
-    ".js":    "application/javascript",
-    ".mjs":   "application/javascript",
-    ".css":   "text/css",
-    ".html":  "text/html",
-    ".json":  "application/json",
-    ".svg":   "image/svg+xml",
-    ".wasm":  "application/wasm",
+    ".js": "application/javascript",
+    ".mjs": "application/javascript",
+    ".css": "text/css",
+    ".html": "text/html",
+    ".json": "application/json",
+    ".svg": "image/svg+xml",
+    ".wasm": "application/wasm",
 }
 
 for _ext, _ctype in _MIME_FIXES.items():
@@ -262,6 +262,7 @@ if TYPE_CHECKING:
     from nanobot.cron.service import CronService
     from nanobot.triggers.local_store import LocalTriggerStore
     from nanobot.webui.settings_services import WebUISettingsServices
+
 
 def _decode_api_key(raw_key: str) -> str | None:
     key = unquote(raw_key)
@@ -301,6 +302,7 @@ def _request_query(request: WsRequest) -> dict[str, list[str]]:
 def _default_model_name_from_config(config_path: Path | None = None) -> str | None:
     try:
         from nanobot.config.loader import load_config
+
         model = load_config(config_path).resolve_preset().model.strip()
         return model or None
     except Exception as e:
@@ -363,9 +365,7 @@ class GatewayHTTPHandler:
         mcp_runtime_status: Callable[[], Mapping[str, str]] | None = None,
         mcp_reload: Callable[[], Awaitable[dict[str, Any]]] | None = None,
         skill_state_action: Callable[[set[str]], None] | None = None,
-        recovery_action: (
-            Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None
-        ) = None,
+        recovery_action: (Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None) = None,
         log: Any = logger,
     ) -> None:
         self.config = config
@@ -379,9 +379,7 @@ class GatewayHTTPHandler:
         self.workspaces = workspaces
         self.settings = settings
         self.skills_workspace_path = skills_workspace_path
-        self.disabled_skills: set[str] = (
-            disabled_skills if disabled_skills is not None else set()
-        )
+        self.disabled_skills: set[str] = disabled_skills if disabled_skills is not None else set()
         self.skill_state_action = skill_state_action
         self.recovery_action = recovery_action
         self._skill_install_lock = asyncio.Lock()
@@ -553,10 +551,14 @@ class GatewayHTTPHandler:
         connect_action = _WEBUI_CHANNEL_CONNECT_ACTIONS.get(action)
         if connect_action is not None:
             channel = payload.get("channel")
-            if not isinstance(channel, str) or re.fullmatch(
-                r"[A-Za-z0-9_-]{1,64}",
-                channel,
-            ) is None:
+            if (
+                not isinstance(channel, str)
+                or re.fullmatch(
+                    r"[A-Za-z0-9_-]{1,64}",
+                    channel,
+                )
+                is None
+            ):
                 return _http_error(400, "invalid channel name")
             return f"/api/settings/channels/{channel}/connect/{connect_action}"
         return _http_error(404, "unknown WebUI mutation action")
@@ -678,7 +680,11 @@ class GatewayHTTPHandler:
     # -- Bootstrap ----------------------------------------------------------
 
     def _handle_bootstrap(
-        self, connection: Any, request: Any, *, terminal_probe: bool = False,
+        self,
+        connection: Any,
+        request: Any,
+        *,
+        terminal_probe: bool = False,
     ) -> Response:
         secret = self.config.token_issue_secret.strip() or self.config.token.strip()
         is_local_browser = _is_local_browser_request(connection, request.headers)
@@ -691,15 +697,24 @@ class GatewayHTTPHandler:
         visla_exchange_ok = (
             self.tokens.peek_issued_token_audience(supplied_credential) == "bootstrap"
         )
+        visla_user: str | None = None
         if visla_exchange_ok and not terminal_probe:
             # One-shot: the Visla-minted exchange token is consumed by a real
             # bootstrap and cannot be replayed (terminal probes only peek).
+            # Order matters: the Visla binding must be claimed while the
+            # token's expiry entry still exists — take_issued_token_audience
+            # pops it below, which would make take_issued_visla_user miss.
+            visla_user = self.tokens.take_issued_visla_user(supplied_credential)
             self.tokens.take_issued_token_audience(supplied_credential)
         if not is_proxy_authenticated:
             if secret:
-                if not _issue_route_secret_matches(
-                    request.headers, secret,
-                ) and not visla_exchange_ok:
+                if (
+                    not _issue_route_secret_matches(
+                        request.headers,
+                        secret,
+                    )
+                    and not visla_exchange_ok
+                ):
                     return _http_error(401, "Unauthorized")
             elif not is_local_browser and not visla_exchange_ok:
                 return _http_error(403, "bootstrap is localhost-only")
@@ -733,11 +748,11 @@ class GatewayHTTPHandler:
                 content_type="application/json; charset=utf-8",
                 extra_headers=_NO_STORE_HEADERS,
             )
-        token = self.tokens.issue_token(self.config.token_ttl_s, audience="webui")
+        token = self.tokens.issue_token(
+            self.config.token_ttl_s, audience="webui", visla_user_id=visla_user
+        )
         api_token = (
-            self.tokens.issue_api_token(self.config.token_ttl_s)
-            if api_token_allowed
-            else None
+            self.tokens.issue_api_token(self.config.token_ttl_s) if api_token_allowed else None
         )
 
         ws_url = self._bootstrap_ws_url(request)
@@ -826,7 +841,10 @@ class GatewayHTTPHandler:
                 extra_headers=_NO_STORE_HEADERS,
             )
         ttl_s = self.config.visla_exchange_ttl_s
-        exchange = self.tokens.issue_token(ttl_s, audience="bootstrap")
+        # Retain the conversing user's JWT so per-turn skill subprocesses can
+        # be injected with VISLA_TOKEN (see WebUIGatewayEndpoint.consume_issued_token).
+        self.tokens.visla_tokens.put(str(user.id), visla_token)
+        exchange = self.tokens.issue_token(ttl_s, audience="bootstrap", visla_user_id=str(user.id))
         self._log.info("visla auth ok user={} ({})", user.user_name, user.email)
         return _http_json_response(
             token_response_payload(exchange, ttl_s),
@@ -1092,8 +1110,8 @@ class GatewayHTTPHandler:
         chat_id = decoded_key.split(":", 1)[1]
         active_turn_started_at = websocket_turn_wall_started_at(chat_id)
         active_turn_id = websocket_turn_id(chat_id)
-        active_turn_transcript_persistence_failed = (
-            websocket_turn_transcript_persistence_failed(chat_id)
+        active_turn_transcript_persistence_failed = websocket_turn_transcript_persistence_failed(
+            chat_id
         )
         session_metadata = (
             self.session_manager.read_session_metadata(decoded_key)
@@ -1138,9 +1156,7 @@ class GatewayHTTPHandler:
             session_messages_loader=load_session_messages,
             active_turn_started_at=active_turn_started_at,
             active_turn_id=active_turn_id,
-            active_turn_transcript_persistence_failed=(
-                active_turn_transcript_persistence_failed
-            ),
+            active_turn_transcript_persistence_failed=(active_turn_transcript_persistence_failed),
             limit=limit,
             direction=direction,
             before=before,
@@ -1356,7 +1372,10 @@ class GatewayHTTPHandler:
                 if len(deliveries) != 1:
                     return _http_error(404, "run not found")
                 response = await asyncio.to_thread(
-                    trigger_run_response, self.local_trigger_store.runs_dir, trigger, deliveries[0],
+                    trigger_run_response,
+                    self.local_trigger_store.runs_dir,
+                    trigger,
+                    deliveries[0],
                 )
             elif kind == "cron":
                 job = self.cron_service.get_job(job_id) if self.cron_service else None
@@ -1368,7 +1387,10 @@ class GatewayHTTPHandler:
                 if len(runs) != 1:
                     return _http_error(404, "run not found")
                 response = await asyncio.to_thread(
-                    cron_run_response, self.cron_service.store_path.parent / "runs", job, runs[0],
+                    cron_run_response,
+                    self.cron_service.store_path.parent / "runs",
+                    job,
+                    runs[0],
                 )
             else:
                 return _http_error(400, "invalid automation kind")
@@ -1666,21 +1688,21 @@ class GatewayHTTPHandler:
             except Exception:
                 self._log.exception("skill installation failed")
                 return _http_error(500, "skill installation failed")
-        return _http_json_response({
-            **webui_skills_payload(
-                self.skills_workspace_path,
-                disabled_skills=self.disabled_skills,
-            ),
-            "last_action": action,
-        })
+        return _http_json_response(
+            {
+                **webui_skills_payload(
+                    self.skills_workspace_path,
+                    disabled_skills=self.disabled_skills,
+                ),
+                "last_action": action,
+            }
+        )
 
     def _allow_webui_package_install(self, connection: Any, request: WsRequest) -> bool:
         if _is_local_browser_request(connection, request.headers):
             return True
         try:
-            return bool(
-                self.settings.config.load().tools.webui_allow_remote_package_install
-            )
+            return bool(self.settings.config.load().tools.webui_allow_remote_package_install)
         except Exception:
             self._log.exception("failed to load remote package install policy")
             return False
@@ -1706,13 +1728,15 @@ class GatewayHTTPHandler:
         except SkillManagementError as exc:
             return _http_error(exc.status, exc.message)
         self._apply_skill_state()
-        return _http_json_response({
-            **webui_skills_payload(
-                self.skills_workspace_path,
-                disabled_skills=self.disabled_skills,
-            ),
-            "last_action": action,
-        })
+        return _http_json_response(
+            {
+                **webui_skills_payload(
+                    self.skills_workspace_path,
+                    disabled_skills=self.disabled_skills,
+                ),
+                "last_action": action,
+            }
+        )
 
     def _handle_webui_skill_delete(
         self,
@@ -1736,13 +1760,15 @@ class GatewayHTTPHandler:
         except SkillManagementError as exc:
             return _http_error(exc.status, exc.message)
         self._apply_skill_state()
-        return _http_json_response({
-            **webui_skills_payload(
-                self.skills_workspace_path,
-                disabled_skills=self.disabled_skills,
-            ),
-            "last_action": action,
-        })
+        return _http_json_response(
+            {
+                **webui_skills_payload(
+                    self.skills_workspace_path,
+                    disabled_skills=self.disabled_skills,
+                ),
+                "last_action": action,
+            }
+        )
 
     def _apply_skill_state(self) -> None:
         if self.skill_state_action is not None:
@@ -1950,9 +1976,9 @@ def _schedule_matches_job(schedule: CronSchedule, job: CronJob) -> bool:
     if schedule.kind == "every":
         return schedule.every_ms == current.every_ms
     if schedule.kind == "cron":
-        return (schedule.expr or "") == (current.expr or "") and (
-            schedule.tz or None
-        ) == (current.tz or None)
+        return (schedule.expr or "") == (current.expr or "") and (schedule.tz or None) == (
+            current.tz or None
+        )
     return False
 
 

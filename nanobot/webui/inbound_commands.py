@@ -607,6 +607,12 @@ class WebUICommandRouter:
         metadata: dict[str, Any] = {
             "remote": getattr(connection, "remote_address", None)
         }
+        # Per-conversation credential injection: skill subprocesses read
+        # VISLA_TOKEN from this key via RequestContext.metadata. Shallow-copied
+        # so the token never lands in transcript-attached metadata dicts.
+        visla_token = self.gateway.endpoint.visla_token_for(connection)
+        if visla_token:
+            metadata = {**metadata, "visla_token": visla_token}
         if envelope.get("webui") is True:
             metadata["webui"] = True
             metadata.update(self._transcripts.client_turn_metadata(envelope.get("turn_id")))

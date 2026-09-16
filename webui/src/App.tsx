@@ -65,6 +65,8 @@ import {
   loadSavedVislaToken,
   saveSecret,
   saveVislaToken,
+  watchUrlVislaToken,
+  watchVislaTokenMessages,
 } from "@/lib/bootstrap";
 import { displayTitle, sortSessions } from "@/lib/chat-groups";
 import { deriveTitle } from "@/lib/format";
@@ -1156,6 +1158,33 @@ export default function App() {
     if (savedVisla) return bootstrapWithVisla(savedVisla);
     return bootstrapWithSecret("");
   }, [bootstrapWithSecret, bootstrapWithVisla]);
+
+  // Runtime Visla-token rotation: adopt tokens pushed via postMessage (iframe
+  // hosts) or arriving through URL rotation while the app is already running.
+  // A candidate token is validated with an exchange before replacing the
+  // current credential; a live connection keeps running and picks the new
+  // token up on the next bootstrap refresh (see resolveBootstrapSecret).
+  useEffect(() => {
+    const onToken = (token: string) => {
+      if (!token || token === vislaTokenRef.current) return;
+      (async () => {
+        try {
+          await exchangeVislaToken(token);
+        } catch {
+          return; // invalid or rate-limited token — keep the current credential
+        }
+        saveVislaToken(token);
+        vislaTokenRef.current = token;
+        if (state.status === "auth") bootstrapWithVisla(token);
+      })();
+    };
+    const unwatchMessage = watchVislaTokenMessages(onToken);
+    const unwatchUrl = watchUrlVislaToken(onToken);
+    return () => {
+      unwatchMessage();
+      unwatchUrl();
+    };
+  }, [state.status, bootstrapWithVisla]);
 
   if (state.status === "loading") {
     return (
