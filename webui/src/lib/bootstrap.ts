@@ -97,6 +97,8 @@ export async function fetchAuthMethods(
 export interface VislaExchangeResponse {
   token: string;
   expires_in?: number;
+  /** Stable Visla user id, used by the client to scope its local session list. */
+  user_id?: string;
 }
 
 /**
@@ -133,8 +135,7 @@ export async function exchangeVislaToken(
 }
 
 export function consumeUrlBootstrapSecret(): string {
-  if (typeof window === "undefined") return "";
-  const hash = window.location.hash || "";
+  if (typeof window === "undefined") return "";  const hash = window.location.hash || "";
   const queryStart = hash.indexOf("?");
   if (queryStart < 0) return "";
 
@@ -244,6 +245,68 @@ export function watchUrlVislaToken(onToken: (token: string) => void): () => void
     window.removeEventListener("popstate", handler);
     window.removeEventListener("hashchange", handler);
   };
+}
+
+// ---------------------------------------------------------------------------
+// Client-side session isolation: each Visla user keeps a local allow-list of
+// the chat ids created/attached on this browser profile. The sidebar filters
+// the full server list against it, so switching accounts on the same machine
+// shows only the chats that profile actually created. Clearing site data (or
+// switching clients) intentionally starts from an empty list.
+
+const VISIBLE_CHATS_KEY_PREFIX = "nanobot-webui.visible-chats";
+const VISIBLE_CHATS_SOFT_LIMIT = 1000;
+
+function visibleChatsStorageKey(userId: string): string {
+  return `${VISIBLE_CHATS_KEY_PREFIX}.${userId}`;
+}
+
+/** Load the chat-id allow-list for *userId*. Empty userId → null (no filtering). */
+export function loadVisibleChatIds(userId: string): Set<string> | null {
+  if (!userId || typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(visibleChatsStorageKey(userId));
+    if (!raw) return new Set();
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((id): id is string => typeof id === "string" && id.length > 0));
+  } catch {
+    return new Set();
+  }
+}
+
+/** Record one chat id as belonging to *userId*'s local profile. */
+export function markChatVisible(userId: string, chatId: string): void {
+  if (!userId || !chatId || typeof window === "undefined") return;
+  try {
+    const ids = loadVisibleChatIds(userId) ?? new Set<string>();
+    if (ids.has(chatId)) return;
+    ids.add(chatId);
+    // Soft-cap growth: drop the oldest ids beyond the limit.
+    const trimmed = Array.from(ids).slice(-VISIBLE_CHATS_SOFT_LIMIT);
+    window.localStorage.setItem(
+      visibleChatsStorageKey(userId),
+      JSON.stringify(trimmed),
+    );
+  } catch {
+    // ignore storage errors (private mode, quota, etc.)
+  }
+}
+
+/** Remove one chat id from *userId*'s local allow-list (after deletion). */
+export function forgetChatVisible(userId: string, chatId: string): void {
+  if (!userId || !chatId || typeof window === "undefined") return;
+  try {
+    const ids = loadVisibleChatIds(userId);
+    if (!ids || !ids.has(chatId)) return;
+    ids.delete(chatId);
+    window.localStorage.setItem(
+      visibleChatsStorageKey(userId),
+      JSON.stringify(Array.from(ids)),
+    );
+  } catch {
+    // ignore
+  }
 }
 
 /**

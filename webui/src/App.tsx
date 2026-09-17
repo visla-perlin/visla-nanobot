@@ -980,12 +980,16 @@ export default function App() {
   const [state, setState] = useState<BootState>({ status: "loading" });
   const bootstrapSecretRef = useRef("");
   const vislaTokenRef = useRef("");
+  // Stable Visla user id from the latest SSO exchange; scopes the sidebar's
+  // local chat allow-list (client-side session isolation).
+  const [vislaUserId, setVislaUserId] = useState("");
 
   const resolveBootstrapSecret = useCallback(async (): Promise<string> => {
     // In Visla mode the bootstrap credential is a one-shot token minted per
     // attempt; the durable browser-side credential is the Visla token itself.
     if (vislaTokenRef.current) {
       const exchange = await exchangeVislaToken(vislaTokenRef.current);
+      if (exchange.user_id) setVislaUserId(exchange.user_id);
       return exchange.token;
     }
     return bootstrapSecretRef.current;
@@ -1105,6 +1109,7 @@ export default function App() {
           if (cancelled) return;
           saveVislaToken(vislaToken);
           vislaTokenRef.current = vislaToken;
+          setVislaUserId(exchange.user_id ?? "");
           startBootstrap(
             async () => exchange.token,
             () => {
@@ -1169,7 +1174,8 @@ export default function App() {
       if (!token || token === vislaTokenRef.current) return;
       (async () => {
         try {
-          await exchangeVislaToken(token);
+          const exchange = await exchangeVislaToken(token);
+          if (exchange.user_id) setVislaUserId(exchange.user_id);
         } catch {
           return; // invalid or rate-limited token — keep the current credential
         }
@@ -1239,6 +1245,9 @@ export default function App() {
     clearSavedVislaToken();
     bootstrapSecretRef.current = "";
     vislaTokenRef.current = "";
+    // Signing out drops the local chat allow-list scoping; the next SSO
+    // exchange re-establishes it for whichever user signs in.
+    setVislaUserId("");
     setState({ status: "auth" });
   };
 
@@ -1276,6 +1285,7 @@ export default function App() {
     >
       <Shell
         runtimeSurface={state.runtimeSurface}
+        vislaUserId={vislaUserId}
         onModelNameChange={handleModelNameChange}
         onLogout={handleLogout}
         onNativeEngineRestart={handleNativeEngineRestart}
@@ -1286,11 +1296,13 @@ export default function App() {
 
 function Shell({
   runtimeSurface,
+  vislaUserId,
   onModelNameChange,
   onLogout,
   onNativeEngineRestart,
 }: {
   runtimeSurface: RuntimeSurface;
+  vislaUserId: string;
   onModelNameChange: (modelName: string | null) => void;
   onLogout: () => void;
   onNativeEngineRestart: () => Promise<string>;
@@ -1306,7 +1318,7 @@ function Shell({
     forkChat,
     deleteChat,
     getSessionAutomations,
-  } = useSessions();
+  } = useSessions(vislaUserId);
   const {
     state: sidebarState,
     loading: sidebarStateLoading,

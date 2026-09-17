@@ -846,8 +846,12 @@ class GatewayHTTPHandler:
         self.tokens.visla_tokens.put(str(user.id), visla_token)
         exchange = self.tokens.issue_token(ttl_s, audience="bootstrap", visla_user_id=str(user.id))
         self._log.info("visla auth ok user={} ({})", user.user_name, user.email)
+        payload = token_response_payload(exchange, ttl_s)
+        # Let the client scope its local session list to this user (client-side
+        # isolation; the gateway itself keeps serving the full list).
+        payload["user_id"] = str(user.id)
         return _http_json_response(
-            token_response_payload(exchange, ttl_s),
+            payload,
             extra_headers=_NO_STORE_HEADERS,
         )
 

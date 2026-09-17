@@ -10,6 +10,11 @@ import {
   listSessions,
 } from "@/lib/api";
 import { hasPendingAgentActivity } from "@/lib/activity-timeline";
+import {
+  forgetChatVisible,
+  loadVisibleChatIds,
+  markChatVisible,
+} from "@/lib/bootstrap";
 import { deriveTitle } from "@/lib/format";
 import { webuiThreadCache } from "@/lib/webui-thread-cache";
 import type {
@@ -188,8 +193,13 @@ function cachedHistoryState(
   };
 }
 
-/** Sidebar state: fetches the full session list and exposes create / delete actions. */
-export function useSessions(): {
+/** Sidebar state: fetches the full session list and exposes create / delete actions.
+ *
+ * ``vislaUserId`` scopes the sidebar to this browser profile's own chats:
+ * the fetched list is filtered against a local allow-list recorded at
+ * create/fork time (see lib/bootstrap). Empty id → no local filtering.
+ */
+export function useSessions(vislaUserId: string = ""): {
   sessions: ChatSummary[];
   loading: boolean;
   error: string | null;
@@ -210,10 +220,12 @@ export function useSessions(): {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const tokenRef = useRef(token);
+  const vislaUserIdRef = useRef(vislaUserId);
   const optimisticKeysRef = useRef<Set<string>>(new Set());
   const refreshPendingRef = useRef(false);
   const refreshInFlightRef = useRef<Promise<void> | null>(null);
   tokenRef.current = token;
+  vislaUserIdRef.current = vislaUserId;
 
   const refresh = useCallback((): Promise<void> => {
     refreshPendingRef.current = true;
@@ -225,11 +237,15 @@ export function useSessions(): {
           refreshPendingRef.current = false;
           try {
             const rows = await listSessions(tokenRef.current);
-            const serverKeys = new Set(rows.map((row) => row.key));
+            const localAllowList = loadVisibleChatIds(vislaUserIdRef.current);
+            const filteredRows = localAllowList
+              ? rows.filter((row) => localAllowList.has(row.chatId))
+              : rows;
+            const serverKeys = new Set(filteredRows.map((row) => row.key));
             setSessions((prev) => {
               const byKey = new Map(prev.map((row) => [row.key, row]));
               const next = [
-                ...rows.map((row) => {
+                ...filteredRows.map((row) => {
                   const previous = byKey.get(row.key);
                   return previous && JSON.stringify(previous) === JSON.stringify(row) ? previous : row;
                 }),
@@ -264,6 +280,12 @@ export function useSessions(): {
     void refresh();
   }, [refresh]);
 
+  // Re-filter when the signed-in Visla user changes (account switch).
+  useEffect(() => {
+    if (!vislaUserId) return;
+    void refresh();
+  }, [vislaUserId, refresh]);
+
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const unsubscribe = client.onSessionUpdate(() => {
@@ -285,6 +307,7 @@ export function useSessions(): {
   ): Promise<string> => {
     const chatId = await client.newChat(CHAT_CREATE_TIMEOUT_MS, workspaceScope);
     const key = `websocket:${chatId}`;
+    markChatVisible(vislaUserIdRef.current, chatId);
     optimisticKeysRef.current.add(key);
     // Optimistic insert; a subsequent refresh will replace it with the
     // authoritative row once the server persists the session.
@@ -317,6 +340,7 @@ export function useSessions(): {
       CHAT_CREATE_TIMEOUT_MS,
     );
     const key = `websocket:${chatId}`;
+    markChatVisible(vislaUserIdRef.current, chatId);
     optimisticKeysRef.current.add(key);
     setSessions((prev) => [
       {
@@ -340,6 +364,9 @@ export function useSessions(): {
       const result = await apiDeleteSession(client, key, options);
       if (result.blocked_by_automations || (!result.deleted && !optimistic)) return result;
       optimisticKeysRef.current.delete(key);
+      forgetChatVisible(vislaUserIdRef.current, key.startsWith("websocket:")
+        ? key.slice("websocket:".length)
+        : key);
       webuiThreadCache.delete(key);
       setSessions((prev) => prev.filter((s) => s.key !== key));
       // The gateway may have restarted and forgotten an unpersisted chat's
