@@ -193,6 +193,10 @@ class WebSocketConfig(Base):
       browser.
     - ``visla_current_user_url``: Visla endpoint used to validate user tokens.
     - ``visla_exchange_ttl_s``: Lifetime of the one-shot bootstrap token minted by the Visla exchange.
+    - ``visla_admin_users``: Visla usernames/emails treated as admins in the WebUI. Bootstrap reports
+      ``is_admin`` per caller; non-admin Visla users get the settings/skills/apps/automations/channels
+      entries hidden. Matches ``userName`` or ``email`` case-insensitively. Empty (default) means
+      everyone is an admin; callers without a Visla identity always are.
     - ``public_ws_url``: Optional public WebSocket endpoint returned by WebUI bootstrap instead of
       deriving one from proxy request headers. Its path must match ``path``.
     - ``websocket_requires_token``: If True, the handshake must include a valid token (static or issued and not expired).
@@ -213,6 +217,7 @@ class WebSocketConfig(Base):
     visla_auth_enabled: bool = False
     visla_current_user_url: str = DEFAULT_VISLA_CURRENT_USER_URL
     visla_exchange_ttl_s: int = Field(default=120, ge=10, le=3600)
+    visla_admin_users: list[str] = Field(default_factory=list)
     trusted_proxy_auth: TrustedProxyAuthConfig | None = None
     token_ttl_s: int = Field(default=300, ge=30, le=86_400)
     websocket_requires_token: bool = True
@@ -269,6 +274,12 @@ class WebSocketConfig(Base):
             raise ValueError("visla_current_user_url must be an absolute http(s) URL")
         return value
 
+    @field_validator("visla_admin_users")
+    @classmethod
+    def visla_admin_users_normalized(cls, value: list[str]) -> list[str]:
+        normalized = [entry.strip().lower() for entry in value if entry.strip()]
+        return list(dict.fromkeys(normalized))
+
     @field_validator("public_ws_url")
     @classmethod
     def public_ws_url_format(cls, value: str) -> str:
@@ -284,14 +295,18 @@ class WebSocketConfig(Base):
             or parsed.query
             or parsed.fragment
         ):
-            raise ValueError("public_ws_url must be an absolute ws:// or wss:// URL without credentials")
+            raise ValueError(
+                "public_ws_url must be an absolute ws:// or wss:// URL without credentials"
+            )
         return urlunsplit(
             (parsed.scheme, parsed.netloc, _normalize_config_path(parsed.path or "/"), "", "")
         )
 
     @model_validator(mode="after")
     def public_ws_url_matches_path(self) -> Self:
-        if self.public_ws_url and urlsplit(self.public_ws_url).path != _normalize_config_path(self.path):
+        if self.public_ws_url and urlsplit(self.public_ws_url).path != _normalize_config_path(
+            self.path
+        ):
             raise ValueError("public_ws_url path must match path")
         return self
 
@@ -307,7 +322,11 @@ class WebSocketConfig(Base):
     def wildcard_host_requires_auth(self) -> Self:
         if self.host not in ("0.0.0.0", "::"):
             return self
-        if self.token.strip() or self.token_issue_secret.strip() or self.trusted_proxy_auth is not None:
+        if (
+            self.token.strip()
+            or self.token_issue_secret.strip()
+            or self.trusted_proxy_auth is not None
+        ):
             return self
         raise ValueError(
             "host is 0.0.0.0 (all interfaces) but neither token, token_issue_secret, "
@@ -629,8 +648,10 @@ class WebSocketChannel(BaseChannel):
         """Return whether every bound socket still has a live listen capability."""
         try:
             sockets = server.sockets
-            return bool(sockets) and server.is_serving() and all(
-                cls._socket_is_accepting(sock) for sock in sockets
+            return (
+                bool(sockets)
+                and server.is_serving()
+                and all(cls._socket_is_accepting(sock) for sock in sockets)
             )
         except OSError:
             return False
@@ -776,11 +797,7 @@ class WebSocketChannel(BaseChannel):
                         was_serving=was_serving,
                     ):
                         raise
-                    uptime = (
-                        asyncio.get_running_loop().time() - started_at
-                        if started_at
-                        else 0.0
-                    )
+                    uptime = asyncio.get_running_loop().time() - started_at if started_at else 0.0
                     if uptime >= _LISTENER_STABLE_AFTER_S:
                         failures = 0
                     delay = _LISTENER_RESTART_BACKOFF_S[
@@ -835,9 +852,16 @@ class WebSocketChannel(BaseChannel):
                         "event": "ready",
                         "chat_id": default_chat_id,
                         "client_id": client_id,
-                        **({"terminal": {
-                            "protocolVersion": 1, "gatewayId": self.gateway.tokens.instance_id,
-                        }} if _query_first(query, "terminal_protocol") == "1" else {}),
+                        **(
+                            {
+                                "terminal": {
+                                    "protocolVersion": 1,
+                                    "gatewayId": self.gateway.tokens.instance_id,
+                                }
+                            }
+                            if _query_first(query, "terminal_protocol") == "1"
+                            else {}
+                        ),
                     },
                     ensure_ascii=False,
                 )
@@ -1152,7 +1176,11 @@ class WebSocketChannel(BaseChannel):
         metadata: dict[str, Any] | None,
         phase: str,
     ) -> bool:
-        if not persisted and phase in {"answer", "complete"} and (metadata or {}).get("webui") is True:
+        if (
+            not persisted
+            and phase in {"answer", "complete"}
+            and (metadata or {}).get("webui") is True
+        ):
             owner = (metadata or {}).get(WEBSOCKET_TURN_OWNER_METADATA_KEY)
             mark_websocket_turn_transcript_persistence_failed(
                 chat_id,
@@ -1430,9 +1458,7 @@ class WebSocketChannel(BaseChannel):
                 metadata=metadata,
                 phase="complete",
                 transcript_overrides=(
-                    {WEBUI_TRANSCRIPT_INCOMPLETE_KEY: True}
-                    if prior_persistence_failure
-                    else None
+                    {WEBUI_TRANSCRIPT_INCOMPLETE_KEY: True} if prior_persistence_failure else None
                 ),
             )
             if persisted:
@@ -1550,11 +1576,7 @@ class WebSocketChannel(BaseChannel):
     ) -> None:
         """Notify one chat's subscribers which model is handling its current request."""
         conns = list(self._subs.get(chat_id, ()))
-        if (
-            not conns
-            or not isinstance(model_name, str)
-            or not model_name.strip()
-        ):
+        if not conns or not isinstance(model_name, str) or not model_name.strip():
             return
         body: dict[str, Any] = {
             "event": "turn_model_updated",

@@ -404,6 +404,8 @@ export interface ChatSummary {
   workspaceScope?: WorkspaceScopePayload | null;
   /** Stable, server-owned @handle for this session. */
   handle?: SessionHandle | null;
+  /** Visla user id that created/owns this chat (null when unknown). */
+  user_id?: string | null;
 }
 
 export type WorkspaceAccessMode = "restricted" | "full";
@@ -486,6 +488,8 @@ export interface BootstrapResponse {
   model_name?: string | null;
   runtime_surface?: RuntimeSurface;
   runtime_capabilities?: RuntimeCapabilities;
+  /** False when the gateway's visla_admin_users list excludes this caller. */
+  is_admin?: boolean;
 }
 
 interface WebUITransportLimits {

@@ -32,6 +32,7 @@ from nanobot.session.manager import (
 )
 from nanobot.session.model_selection import model_preset_from_metadata
 from nanobot.session.recovery import recovery_state_from_metadata
+from nanobot.webui.metadata import SESSION_OWNER_METADATA_KEY
 from nanobot.webui.session_identity import (
     WEBUI_SESSION_STORAGE_PREFIX,
     is_webui_session_key,
@@ -39,7 +40,7 @@ from nanobot.webui.session_identity import (
     webui_session_key,
 )
 
-_INDEX_VERSION = 8
+_INDEX_VERSION = 9
 _INDEX_FILENAME = ".webui_session_index.json"
 _MODEL_PRESET_FIELD = "model_preset"
 _ROW_SOURCE_FIELD = "_source"
@@ -71,10 +72,7 @@ def list_webui_sessions(session_manager: SessionManager) -> list[dict[str, Any]]
                 _write_index_rows(session_manager.sessions_dir, rows)
             except Exception as e:
                 logger.debug("Failed to write WebUI session list index: {}", e)
-    sessions = [
-        _public_row(session_manager.sessions_dir, get_webui_dir(), row)
-        for row in rows
-    ]
+    sessions = [_public_row(session_manager.sessions_dir, get_webui_dir(), row) for row in rows]
     return sorted(sessions, key=lambda row: row.get("updated_at", ""), reverse=True)
 
 
@@ -83,8 +81,7 @@ def _reconcile_index(session_manager: SessionManager) -> tuple[list[dict[str, An
     existing_by_source = {
         (row.get(_ROW_SOURCE_FIELD), row.get("file")): row
         for row in existing_rows or []
-        if isinstance(row.get(_ROW_SOURCE_FIELD), str)
-        and isinstance(row.get("file"), str)
+        if isinstance(row.get(_ROW_SOURCE_FIELD), str) and isinstance(row.get("file"), str)
     }
     webui_dir = get_webui_dir()
     session_paths: dict[str, Path] = {}
@@ -94,9 +91,7 @@ def _reconcile_index(session_manager: SessionManager) -> tuple[list[dict[str, An
             session_paths[key] = path
 
     session_keys_by_stem = {
-        SessionManager.safe_key(key): key
-        for key in session_paths
-        if is_webui_session_key(key)
+        SessionManager.safe_key(key): key for key in session_paths if is_webui_session_key(key)
     }
     rows: list[dict[str, Any]] = []
     changed = existing_rows is None
@@ -127,10 +122,14 @@ def _reconcile_index(session_manager: SessionManager) -> tuple[list[dict[str, An
             if isinstance(cached_key, str) and _valid_transcript_session_key(cached_key, stem)
             else None
         )
-        if key is not None and row is not None and _indexed_transcript_row_matches(
-            row,
-            key,
-            webui_dir,
+        if (
+            key is not None
+            and row is not None
+            and _indexed_transcript_row_matches(
+                row,
+                key,
+                webui_dir,
+            )
         ):
             rows.append(row)
             expected_sources.add(identity)
@@ -253,6 +252,7 @@ def _public_row(sessions_dir: Path, webui_dir: Path, row: dict[str, Any]) -> dic
         "preview": row.get("preview", ""),
         _MODEL_PRESET_FIELD: row.get(_MODEL_PRESET_FIELD),
         "recovery_state": row.get("recovery_state"),
+        "user_id": row.get("user_id"),
         _WORKSPACE_SCOPE_PRESENT_FIELD: row.get(_WORKSPACE_SCOPE_PRESENT_FIELD, False),
         _WORKSPACE_SCOPE_VALUE_FIELD: row.get(_WORKSPACE_SCOPE_VALUE_FIELD),
         "path": str(path),
@@ -287,9 +287,7 @@ def _indexed_workspace_scope_fields(metadata: object) -> dict[str, object]:
     elif isinstance(raw_scope, dict):
         scope_data = cast(dict[object, object], raw_scope)
         recognized = {
-            key: scope_data[key]
-            for key in _INDEXED_WORKSPACE_SCOPE_KEYS
-            if key in scope_data
+            key: scope_data[key] for key in _INDEXED_WORKSPACE_SCOPE_KEYS if key in scope_data
         }
         try:
             encoded = json.dumps(recognized, ensure_ascii=False)
@@ -514,8 +512,7 @@ def _transcript_preview(record: dict[str, Any]) -> tuple[str, str]:
     if event == "user" or record.get("role") == "user":
         return preview, ""
     if (
-        event == "message"
-        and record.get("kind") not in _TRANSCRIPT_NON_ANSWER_KINDS
+        event == "message" and record.get("kind") not in _TRANSCRIPT_NON_ANSWER_KINDS
     ) or record.get("role") == "assistant":
         return "", preview
     return "", ""
@@ -523,11 +520,7 @@ def _transcript_preview(record: dict[str, Any]) -> tuple[str, str]:
 
 def _transcript_created_at(record: dict[str, Any]) -> str | None:
     value = record.get("created_at_ms")
-    if (
-        not isinstance(value, int | float)
-        or isinstance(value, bool)
-        or value < 0
-    ):
+    if not isinstance(value, int | float) or isinstance(value, bool) or value < 0:
         return None
     try:
         return datetime.fromtimestamp(value / 1000).isoformat()
@@ -541,9 +534,7 @@ def _scan_transcript_row(
     paths: tuple[Path, ...],
     webui_dir: Path,
 ) -> dict[str, Any] | None:
-    path_key = session_key or webui_session_key(
-        stem.removeprefix(_WEBUI_SESSION_STEM_PREFIX)
-    )
+    path_key = session_key or webui_session_key(stem.removeprefix(_WEBUI_SESSION_STEM_PREFIX))
     signature = _webui_activity_signature(path_key, webui_dir)
     activity_updated_at = _webui_activity_updated_at(signature)
     if activity_updated_at is None:
@@ -613,6 +604,7 @@ def _scan_transcript_row(
         "preview": preview or fallback_preview,
         _MODEL_PRESET_FIELD: None,
         "recovery_state": None,
+        "user_id": None,
         **_indexed_workspace_scope_fields({}),
         _ROW_SOURCE_FIELD: _TRANSCRIPT_SOURCE,
         "file": stem,
@@ -700,6 +692,7 @@ def _scan_session_row(
                 "preview": preview or fallback_preview,
                 _MODEL_PRESET_FIELD: model_preset_from_metadata(metadata),
                 "recovery_state": recovery_state_from_metadata(metadata),
+                "user_id": metadata.get(SESSION_OWNER_METADATA_KEY),
                 **_indexed_workspace_scope_fields(metadata),
                 _ROW_SOURCE_FIELD: _SESSION_SOURCE,
                 "file": path.name,

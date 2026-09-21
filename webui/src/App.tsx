@@ -983,6 +983,10 @@ export default function App() {
   // Stable Visla user id from the latest SSO exchange; scopes the sidebar's
   // local chat allow-list (client-side session isolation).
   const [vislaUserId, setVislaUserId] = useState("");
+  // Admin flag reported by the gateway at bootstrap (visla_admin_users).
+  // False hides the settings/skills/apps/automations/channels entries.
+  // Defaults to true (older gateways do not report the flag).
+  const [isAdmin, setIsAdmin] = useState(true);
 
   const resolveBootstrapSecret = useCallback(async (): Promise<string> => {
     // In Visla mode the bootstrap credential is a one-shot token minted per
@@ -1004,6 +1008,7 @@ export default function App() {
       const tokenExpiresAt = boot.expires_in
         ? bootstrapTokenExpiresAt(boot.expires_in)
         : null;
+      setIsAdmin(boot.is_admin !== false);
       if (runtimeHost.socketFactory) {
         client.updateUrl(url, runtimeHost.socketFactory);
       } else {
@@ -1057,6 +1062,7 @@ export default function App() {
           });
           bootstrapSecretRef.current = secret;
           client.connect();
+          setIsAdmin(boot.is_admin !== false);
           setState({
             status: "ready",
             client,
@@ -1286,6 +1292,7 @@ export default function App() {
       <Shell
         runtimeSurface={state.runtimeSurface}
         vislaUserId={vislaUserId}
+        isAdmin={isAdmin}
         onModelNameChange={handleModelNameChange}
         onLogout={handleLogout}
         onNativeEngineRestart={handleNativeEngineRestart}
@@ -1297,12 +1304,14 @@ export default function App() {
 function Shell({
   runtimeSurface,
   vislaUserId,
+  isAdmin,
   onModelNameChange,
   onLogout,
   onNativeEngineRestart,
 }: {
   runtimeSurface: RuntimeSurface;
   vislaUserId: string;
+  isAdmin: boolean;
   onModelNameChange: (modelName: string | null) => void;
   onLogout: () => void;
   onNativeEngineRestart: () => Promise<string>;
@@ -1472,6 +1481,14 @@ function Shell({
       window.removeEventListener("popstate", applyRoute);
     };
   }, []);
+
+  // Settings permission guard: once bootstrap reports the caller is outside
+  // the Settings allowlist, bounce any settings-family route back to chat.
+  // (Direct URL entry like #/settings otherwise bypasses the hidden button.)
+  useEffect(() => {
+    if (isAdmin || view === "chat") return;
+    navigate({ view: "chat", activeKey, settingsSection: "overview" }, { replace: true });
+  }, [isAdmin, view, activeKey, navigate]);
 
   useEffect(() => {
     temporarySessionsRef.current = temporarySessions;
@@ -2285,17 +2302,21 @@ function Shell({
   }, [activeKey, navigate]);
 
   useEffect(() => {
-    const actions = { newChat: onNewChat, search: onOpenSessionSearch, apps: onOpenApps,
-      skills: onOpenSkills, automations: onOpenAutomations, channels: onOpenChannels, settings: () => onOpenSettings() };
+    const actions = { newChat: onNewChat, search: onOpenSessionSearch,
+      apps: isAdmin ? onOpenApps : undefined,
+      skills: isAdmin ? onOpenSkills : undefined,
+      automations: isAdmin ? onOpenAutomations : undefined,
+      channels: isAdmin ? onOpenChannels : undefined,
+      settings: isAdmin ? () => onOpenSettings() : undefined };
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
       const action = matchSidebarShortcut(event);
       if (!action) return;
       event.preventDefault();
-      actions[action]();
+      actions[action]?.();
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onNewChat, onOpenSessionSearch, onOpenApps, onOpenSkills, onOpenAutomations, onOpenChannels, onOpenSettings]);
+  }, [onNewChat, onOpenSessionSearch, onOpenApps, onOpenSkills, onOpenAutomations, onOpenChannels, onOpenSettings, isAdmin]);
 
   const onSettingsSectionChange = useCallback(
     (section: SettingsSectionKey) => {
@@ -2843,6 +2864,7 @@ function Shell({
     onOpenAutomations,
     onOpenChannels,
     onOpenSkills,
+    isAdmin,
     onSettingsIntent,
     onOpenSearch: onOpenSessionSearch,
     activeUtility: view === "apps" || view === "automations" || view === "skills" || view === "channels" ? view : null,
@@ -3062,7 +3084,7 @@ function Shell({
                             workspaceError={workspaceError}
                             onWorkspaceScopeChange={applyWorkspaceScope}
                             settingsSnapshot={settingsSnapshot}
-                            onOpenModelSettings={onOpenModelSettings}
+                            onOpenModelSettings={isAdmin ? onOpenModelSettings : undefined}
                             skills={skills}
                           />
                         );
@@ -3121,7 +3143,7 @@ function Shell({
                             client.setWorkspaceScope(paneSession.chatId, next);
                           }}
                           settingsSnapshot={settingsSnapshot}
-                          onOpenModelSettings={onOpenModelSettings}
+                          onOpenModelSettings={isAdmin ? onOpenModelSettings : undefined}
                           skills={skills}
                         />
                       );
@@ -3130,7 +3152,7 @@ function Shell({
                 </Suspense>
               </ThreadVisibilityContext.Provider>
             </div>
-            {view !== "chat" && (
+            {view !== "chat" && isAdmin && (
               <div className="absolute inset-0 flex flex-col">
                 <Suspense fallback={<SurfaceLoadingFallback />}>
                   <SettingsView

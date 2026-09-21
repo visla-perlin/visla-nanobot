@@ -737,6 +737,7 @@ class GatewayHTTPHandler:
                 ),
                 "runtime_surface": self._runtime_surface,
                 "runtime_capabilities": self._capabilities,
+                "is_admin": self._is_visla_admin(visla_user),
             }
             return _http_json_response(payload, extra_headers=_NO_STORE_HEADERS)
 
@@ -772,6 +773,7 @@ class GatewayHTTPHandler:
             ),
             "runtime_surface": self._runtime_surface,
             "runtime_capabilities": self._capabilities,
+            "is_admin": self._is_visla_admin(visla_user),
         }
         if api_token is not None:
             payload["api_token"] = api_token
@@ -790,6 +792,23 @@ class GatewayHTTPHandler:
         scheme = "wss" if secure else "ws"
         expected_path = _normalize_config_path(self.config.path)
         return f"{scheme}://{host}{expected_path}"
+
+    def _is_visla_admin(self, visla_user: str | None) -> bool:
+        """Whether this caller gets the admin surface (settings/skills/apps/…).
+
+        Empty ``visla_admin_users`` means everyone is an admin; callers without
+        a Visla identity (local bootstrap, trusted proxy, static secret) always
+        are. Visla users match the list by userName or email.
+        """
+        allowed = self.config.visla_admin_users
+        if not allowed or not visla_user:
+            return True
+        profile = self.tokens.visla_tokens.profile(visla_user)
+        if profile is None:
+            return False
+        return (
+            profile.user_name.strip().lower() in allowed or profile.email.strip().lower() in allowed
+        )
 
     # -- Visla SSO exchange ---------------------------------------------------
 
@@ -842,8 +861,11 @@ class GatewayHTTPHandler:
             )
         ttl_s = self.config.visla_exchange_ttl_s
         # Retain the conversing user's JWT so per-turn skill subprocesses can
-        # be injected with VISLA_TOKEN (see WebUIGatewayEndpoint.consume_issued_token).
+        # be injected with VISLA_TOKEN (see WebUIGatewayEndpoint.consume_issued_token),
+        # and the validated profile so bootstrap can answer capability
+        # questions (Settings access) without re-validating upstream.
         self.tokens.visla_tokens.put(str(user.id), visla_token)
+        self.tokens.visla_tokens.put_profile(user)
         exchange = self.tokens.issue_token(ttl_s, audience="bootstrap", visla_user_id=str(user.id))
         self._log.info("visla auth ok user={} ({})", user.user_name, user.email)
         payload = token_response_payload(exchange, ttl_s)

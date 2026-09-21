@@ -124,6 +124,10 @@ class WebUIGatewayEndpoint:
             return ""
         return self._tokens.visla_tokens.latest(user_id)
 
+    def visla_user_id_for(self, connection: ServerConnection) -> str | None:
+        """Return the Visla user id bound to this connection, if any."""
+        return self.connection_visla_users.get(connection)
+
     def is_webui_connection(self, connection: ServerConnection) -> bool:
         return connection in self.webui_connections
 

@@ -31,6 +31,7 @@ All options live under `channels.websocket` in `~/.nanobot/config.json`
 | `vislaAuthEnabled` | `false` | Master switch. Enables the exchange endpoint and shows the Visla input on the WebUI login page. |
 | `vislaCurrentUserUrl` | `https://admin-api.prod01.visla.us/api/my/current-user` | Visla endpoint used to validate user tokens. Must be an absolute `http(s)` URL. |
 | `vislaExchangeTtlS` | `120` | Lifetime (10–3600 s) of the one-shot bootstrap token minted by the exchange. |
+| `vislaAdminUsers` | `[]` | Visla usernames/emails granted admin (matches `userName` or `email`, case-insensitive). Non-admin Visla users get the settings/skills/apps/automations/channels entries hidden in the WebUI. Empty = everyone is admin; callers without a Visla identity always are. |
 | `tokenIssueSecret` | `""` | Existing static WebUI secret (unchanged). Set this too if you still want password login to work. |
 
 Minimal config that enables Visla login:

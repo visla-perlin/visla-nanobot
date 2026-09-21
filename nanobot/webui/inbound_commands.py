@@ -27,6 +27,7 @@ from nanobot.security.workspace_access import (
     WORKSPACE_SCOPE_METADATA_KEY,
     WorkspaceScopeError,
 )
+from nanobot.session.manager import SessionManager
 from nanobot.session.webui_turns import (
     clear_websocket_turn_if_current,
     clear_websocket_turns,
@@ -40,7 +41,7 @@ from nanobot.webui.cli_apps_api import normalize_cli_app_mentions
 from nanobot.webui.forking import handle_webui_fork_chat
 from nanobot.webui.gateway_services import GatewayServices
 from nanobot.webui.mcp_presets_api import normalize_mcp_preset_mentions
-from nanobot.webui.metadata import WEBSOCKET_TURN_OWNER_METADATA_KEY
+from nanobot.webui.metadata import SESSION_OWNER_METADATA_KEY, WEBSOCKET_TURN_OWNER_METADATA_KEY
 from nanobot.webui.session_access import (
     SessionMention,
     WebuiSessionAccess,
@@ -53,6 +54,30 @@ from nanobot.webui.transcription_ws import webui_transcription_event
 
 _WEBUI_REQUEST_CACHE_TTL_S = 5 * 60.0
 _WEBUI_REQUEST_CACHE_MAX = 256
+
+
+def record_session_owner(
+    session_manager: SessionManager,
+    chat_id: str,
+    user_id: str,
+) -> None:
+    """Record the Visla user id that owns this WebUI chat (first writer wins).
+
+    Best-effort: never raises — ownership tracking must not block message flow.
+    Repeated calls from the same (or another) user leave the original owner.
+    """
+    session_key = webui_session_key(chat_id)
+    try:
+        existing = session_manager.read_session_metadata(session_key)
+        if existing is not None:
+            existing_meta = cast(dict[str, Any], existing.get("metadata") or {})
+            if existing_meta.get(SESSION_OWNER_METADATA_KEY):
+                return
+        session = session_manager.get_or_create(session_key)
+        session.metadata.setdefault(SESSION_OWNER_METADATA_KEY, user_id)
+        session_manager.save(session)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("failed to record session owner for {}: {}", chat_id, exc)
 
 
 @dataclass(frozen=True)
@@ -545,9 +570,7 @@ class WebUICommandRouter:
                     **rejection_fields,
                 )
                 return
-            media_paths, reason = self._media.store_inbound_attachments(
-                cast(list[Any], raw_media)
-            )
+            media_paths, reason = self._media.store_inbound_attachments(cast(list[Any], raw_media))
             if reason is not None:
                 await self._transport.webui_send_event(
                     connection,
@@ -604,23 +627,20 @@ class WebUICommandRouter:
             )
             return
 
-        metadata: dict[str, Any] = {
-            "remote": getattr(connection, "remote_address", None)
-        }
+        metadata: dict[str, Any] = {"remote": getattr(connection, "remote_address", None)}
         # Per-conversation credential injection: skill subprocesses read
         # VISLA_TOKEN from this key via RequestContext.metadata. Shallow-copied
         # so the token never lands in transcript-attached metadata dicts.
         visla_token = self.gateway.endpoint.visla_token_for(connection)
         if visla_token:
             metadata = {**metadata, "visla_token": visla_token}
+        visla_user_id = self.gateway.endpoint.visla_user_id_for(connection)
         if envelope.get("webui") is True:
             metadata["webui"] = True
             metadata.update(self._transcripts.client_turn_metadata(envelope.get("turn_id")))
         trusted_webui = metadata.get("webui") is True and connection in self._webui_connections
         is_user_shell = (
-            trusted_webui
-            and envelope.get("user_shell") is True
-            and content.startswith("!")
+            trusted_webui and envelope.get("user_shell") is True and content.startswith("!")
         )
         if is_user_shell:
             metadata[INBOUND_META_USER_SHELL] = True
@@ -655,9 +675,7 @@ class WebUICommandRouter:
 
         accepted = False
         try:
-            if is_webui and (
-                temporary_policy is None or temporary_policy.persist_transcript
-            ):
+            if is_webui and (temporary_policy is None or temporary_policy.persist_transcript):
                 self._transcripts.append_user_message(
                     chat_id,
                     content,
@@ -670,10 +688,12 @@ class WebUICommandRouter:
             if trusted_webui:
                 context_blocks: list[RuntimeContextBlock] = []
                 if not is_user_shell and envelope.get("intent") == "create_automation":
-                    context_blocks.append(RuntimeContextBlock(
-                        source="webui_automation_creation",
-                        content=render_template("agent/automation_creation.md", strip=True),
-                    ))
+                    context_blocks.append(
+                        RuntimeContextBlock(
+                            source="webui_automation_creation",
+                            content=render_template("agent/automation_creation.md", strip=True),
+                        )
+                    )
                 quote = webui_quote_runtime_context(
                     {WEBUI_QUOTE_METADATA: envelope.get("quoted_context")}
                 )
@@ -701,6 +721,13 @@ class WebUICommandRouter:
                 ),
             )
             self._workspaces.persist_scope(chat_id, scope)
+            if visla_user_id and self.gateway.session_manager is not None:
+                await asyncio.to_thread(
+                    record_session_owner,
+                    self.gateway.session_manager,
+                    chat_id,
+                    visla_user_id,
+                )
             accepted = True
         finally:
             if not accepted and queued_owner is not None:
@@ -728,11 +755,7 @@ class WebUICommandRouter:
                 chat_id=chat_id,
                 turn_id=turn_id,
                 starts_turn=queued_owner is not None,
-                **(
-                    {"active_turn_id": active_turn_id}
-                    if active_turn_id is not None
-                    else {}
-                ),
+                **({"active_turn_id": active_turn_id} if active_turn_id is not None else {}),
                 **(
                     {"started_at": started_at}
                     if active_turn_id is not None and started_at is not None
@@ -746,10 +769,14 @@ class WebUICommandRouter:
         envelope: dict[str, Any],
     ) -> None:
         request_id = envelope.get("request_id")
-        if not isinstance(request_id, str) or re.fullmatch(
-            r"[A-Za-z0-9._:-]{1,128}",
-            request_id,
-        ) is None:
+        if (
+            not isinstance(request_id, str)
+            or re.fullmatch(
+                r"[A-Za-z0-9._:-]{1,128}",
+                request_id,
+            )
+            is None
+        ):
             await self._transport.webui_send_event(
                 connection,
                 "error",
@@ -767,10 +794,14 @@ class WebUICommandRouter:
 
         action = envelope.get("action")
         payload = envelope.get("payload")
-        if not isinstance(action, str) or re.fullmatch(
-            r"[a-z][a-z0-9_.]{0,127}",
-            action,
-        ) is None:
+        if (
+            not isinstance(action, str)
+            or re.fullmatch(
+                r"[a-z][a-z0-9_.]{0,127}",
+                action,
+            )
+            is None
+        ):
             await self.send_webui_response(
                 connection,
                 request_id,

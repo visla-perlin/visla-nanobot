@@ -16,7 +16,12 @@
       "tokenIssueSecret": "__TOKEN_ISSUE_SECRET__",
       "websocketRequiresToken": true,
       "vislaAuthEnabled": true,
-      "vislaCurrentUserUrl": "${VISLA_CURRENT_USER_URL}"
+      "vislaCurrentUserUrl": "${VISLA_CURRENT_USER_URL}",
+      "vislaAdminUsers": [
+        "porter.liu@visla.us",
+        "perlin.gan@visla.us",
+        "allan.song@visla.us"
+      ]
     }
   },
   "tools": {

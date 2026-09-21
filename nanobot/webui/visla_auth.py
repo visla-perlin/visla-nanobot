@@ -132,20 +132,22 @@ class VislaAttemptLimiter:
 
 
 class VislaTokenStore:
-    """In-memory registry of the latest Visla JWT per user id.
+    """In-memory registry of the latest Visla JWT and profile per user id.
 
     Used to inject the conversing user's credentials into skill subprocesses
-    (``VISLA_TOKEN``). Tokens never touch disk and are dropped on process
-    restart; users simply re-run the SSO exchange in that case. The entry TTL
-    is only a retention bound — the upstream JWT's own expiry remains the real
-    validity limit, and expired tokens surface as admin-api 3004/3005 to the
-    caller, prompting a fresh SSO exchange.
+    (``VISLA_TOKEN``) and to answer per-user capability questions (such as
+    Settings access) without re-validating upstream. Entries never touch disk
+    and are dropped on process restart; users simply re-run the SSO exchange in
+    that case. The entry TTL is only a retention bound — the upstream JWT's own
+    expiry remains the real validity limit, and expired tokens surface as
+    admin-api 3004/3005 to the caller, prompting a fresh SSO exchange.
     """
 
     def __init__(self, max_users: int = 10_000, entry_ttl_s: float = 24 * 3600.0) -> None:
         self.max_users = max_users
         self.entry_ttl_s = entry_ttl_s
         self._tokens: dict[str, tuple[str, float]] = {}
+        self._profiles: dict[str, tuple[VislaUser, float]] = {}
 
     def put(self, user_id: str, token: str) -> None:
         """Record (or rotate) the latest JWT for *user_id*."""
@@ -170,8 +172,33 @@ class VislaTokenStore:
             return ""
         return token
 
+    def put_profile(self, user: VislaUser) -> None:
+        """Record (or rotate) the validated profile of *user*."""
+        user_id = str(user.id)
+        if not user_id:
+            return
+        self._prune()
+        if len(self._profiles) >= self.max_users and user_id not in self._profiles:
+            logger.warning("visla profile store full ({}), rejecting new entry", self.max_users)
+            return
+        self._profiles[user_id] = (user, time.monotonic())
+
+    def profile(self, user_id: str | None) -> VislaUser | None:
+        """Return the stored profile for *user_id*, or None when unknown/expired."""
+        if not user_id:
+            return None
+        entry = self._profiles.get(user_id)
+        if entry is None:
+            return None
+        user, stored_at = entry
+        if time.monotonic() - stored_at > self.entry_ttl_s:
+            self._profiles.pop(user_id, None)
+            return None
+        return user
+
     def clear(self) -> None:
         self._tokens.clear()
+        self._profiles.clear()
 
     def _prune(self) -> None:
         now = time.monotonic()
@@ -182,3 +209,10 @@ class VislaTokenStore:
         ]
         for user_id in stale:
             del self._tokens[user_id]
+        stale_profiles = [
+            user_id
+            for user_id, (_, stored_at) in self._profiles.items()
+            if now - stored_at > self.entry_ttl_s
+        ]
+        for user_id in stale_profiles:
+            del self._profiles[user_id]

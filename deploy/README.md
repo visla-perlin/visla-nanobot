@@ -93,7 +93,12 @@ If you manage `config.json` by hand, keep these multi-environment fields:
   "channels": {
     "websocket": {
       "vislaAuthEnabled": true,
-      "vislaCurrentUserUrl": "${VISLA_CURRENT_USER_URL}"
+      "vislaCurrentUserUrl": "${VISLA_CURRENT_USER_URL}",
+      "vislaAdminUsers": [
+        "porter.liu@visla.us",
+        "perlin.gan@visla.us",
+        "allan.song@visla.us"
+      ]
     }
   },
   "tools": {

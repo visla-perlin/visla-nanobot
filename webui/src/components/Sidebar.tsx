@@ -68,6 +68,9 @@ interface SidebarProps {
   onOpenSkills: () => void;
   onOpenAutomations: () => void;
   onOpenChannels: () => void;
+  /** False when the gateway's visla_admin_users list excludes this caller;
+   *  hides the settings/skills/apps/automations/channels entries. */
+  isAdmin?: boolean;
   onSettingsIntent?: () => void;
   onOpenSearch: () => void;
   activeUtility?: "apps" | "skills" | "automations" | "channels" | null;
@@ -111,6 +114,7 @@ export function Sidebar(props: SidebarProps) {
   const [menuPortalContainer, setMenuPortalContainer] =
     useState<HTMLElement | null>(null);
   const collapsed = Boolean(props.collapsed);
+  const settingsAvailable = props.isAdmin !== false;
   const toggleLabel = t("thread.header.toggleSidebar");
   const apple = isApplePlatform();
   const activeActionRef = useRef<HTMLButtonElement>(null);
@@ -209,6 +213,7 @@ export function Sidebar(props: SidebarProps) {
         )}
       >
         {collapsed && <>{newChatButton}{searchButton}</>}
+        {settingsAvailable && (<>
         <SidebarActionButton
           collapsed={collapsed}
           label={t("sidebar.apps")}
@@ -253,6 +258,7 @@ export function Sidebar(props: SidebarProps) {
           selectionRef={activeActionRef}
           icon={<MessageCircle className="h-4 w-4" />}
         />
+        </>)}
         {props.archivedCount ? (
           <SidebarActionButton
             collapsed={collapsed}
@@ -321,17 +327,19 @@ export function Sidebar(props: SidebarProps) {
           collapsed && "w-14 flex-col px-0",
         )}
       >
-        <SidebarActionButton
-          collapsed={collapsed}
-          label={t("sidebar.settings")}
-          iconOnly
-          shortcut={sidebarShortcutLabel("settings", apple)}
-          ariaKeyShortcuts={sidebarShortcutAria("settings")}
-          onClick={props.onOpenSettings}
-          onIntent={props.onSettingsIntent}
-          className="w-9"
-          icon={<Settings className="h-4 w-4" />}
-        />
+        {settingsAvailable && (
+          <SidebarActionButton
+            collapsed={collapsed}
+            label={t("sidebar.settings")}
+            iconOnly
+            shortcut={sidebarShortcutLabel("settings", apple)}
+            ariaKeyShortcuts={sidebarShortcutAria("settings")}
+            onClick={props.onOpenSettings}
+            onIntent={props.onSettingsIntent}
+            className="w-9"
+            icon={<Settings className="h-4 w-4" />}
+          />
+        )}
         <ConnectionBadge />
       </div>
     </nav>
