@@ -1,0 +1,27 @@
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: {{ .Values.app.name }}
+  namespace: default
+spec:
+  hosts:
+  - "{{ .Values.host }}"
+  gateways:
+  - default-gateway
+  http:
+  # Cloudflare (Free/Pro/Business default 100s) and ALB both have WS idle
+  # timeouts; align istio's stream timeout to the ALB 3600s ceiling so any
+  # disconnect originates from CF (which we control via dashboard) rather
+  # than from the mesh mid-stream.
+  - timeout: 3600s
+    route:
+    - destination:
+        host: {{ .Values.app.name }}
+        port:
+          number: {{ .Values.webuiPort }}
+      headers:
+        response:
+          remove:
+          - x-envoy-upstream-service-time
+          - x-envoy-decorator-operation
+          - server

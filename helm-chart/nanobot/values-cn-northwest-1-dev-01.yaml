@@ -1,0 +1,40 @@
+environment:
+  name: cn-northwest-1-dev-01
+  profile: dev
+
+image:
+  repo: 665444435332.dkr.ecr.cn-northwest-1.amazonaws.com.cn/nanobot
+  tag: dev
+
+host: nanobot.dev01.vislaus.cn
+
+region: cn-northwest-1
+replica: 1
+
+resources:
+  requests:
+    cpu: "1"
+    memory: "2Gi"
+  limits:
+    cpu: "2"
+    memory: "4Gi"
+
+visla:
+  currentUserUrl: https://admin-api.dev01.vislaus.cn/api/my/current-user
+  adminApiBaseUrl: https://admin-api.dev01.vislaus.cn
+
+vislaAdminUsers:
+  - porter.liu@visla.us
+  - perlin.gan@visla.us
+  - allan.song@visla.us
+
+# Model: OpenAI-compatible custom gateway. TODO: fill the real dev gateway URL.
+customModel:
+  providerName: myllm
+  baseUrl: https://REPLACE-DEV-GATEWAY/v1
+defaultModel: myllm/gpt-5.6-luna
+
+# aws web firewall
+aws_partition: aws-cn
+aws_account_id: "665444435332"
+waf_acl_id: 968833e4-d943-489b-a039-06ae6afaf1e3

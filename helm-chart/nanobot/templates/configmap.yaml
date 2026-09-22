@@ -1,0 +1,49 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.app.name }}-config
+  namespace: {{ .Values.namespace }}
+data:
+  # Seeded by the image entrypoint into the PVC data dir as config.json on
+  # first boot only (RENDER=true path in entrypoint.sh): runtime edits made
+  # via the WebUI settings survive restarts, and ${VAR} placeholders are
+  # resolved from the container env at every startup by the config loader.
+  render-config.json: |
+    {
+      "agents": {
+        "defaults": {
+          "workspace": "/home/nanobot/.nanobot/workspace",
+          "model": "{{ .Values.defaultModel }}"
+        }
+      },
+      "providers": {
+{{- if .Values.customModel.providerName }}
+        "{{ .Values.customModel.providerName }}": {
+          "apiKey": "${CUSTOM_MODEL_API_KEY}",
+          "apiBase": "{{ .Values.customModel.baseUrl }}"
+        },
+{{- end }}
+        "anthropic": {
+          "apiKey": "${ANTHROPIC_API_KEY}"
+        },
+        "openai": {
+          "apiKey": "${OPENAI_API_KEY}",
+          "apiBase": "${OPENAI_BASE_URL}"
+        }
+      },
+      "channels": {
+        "websocket": {
+          "enabled": true,
+          "host": "0.0.0.0",
+          "port": {{ .Values.webuiPort }},
+          "tokenIssueSecret": "${NANOBOT_WEB_TOKEN}",
+          "websocketRequiresToken": true,
+          "vislaAuthEnabled": true,{{- if .Values.vislaAdminUsers }}
+          "vislaAdminUsers": {{ .Values.vislaAdminUsers | toJson }},{{- end }}
+          "vislaCurrentUserUrl": "${VISLA_CURRENT_USER_URL}"
+        }
+      },
+      "tools": {
+        "restrictToWorkspace": true
+      }
+    }

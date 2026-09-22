@@ -1,0 +1,148 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.app.name }}
+  namespace: {{ .Values.namespace }}
+spec:
+  replicas: {{ .Values.replica }}
+  selector:
+    matchLabels:
+      app: {{ .Values.app.name }}
+  template:
+    metadata:
+      annotations:
+        proxy.istio.io/config: |
+          terminationDrainDuration: 60s
+      labels:
+        app: {{ .Values.app.name }}
+    spec:
+      terminationGracePeriodSeconds: 60
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: k8s.visla.us/node-group
+                operator: In
+                values:
+                - DEFAULT
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 1
+            preference:
+              matchExpressions:
+              - key: eks.amazonaws.com/capacityType
+                operator: In
+                values:
+                - SPOT
+          - weight: 1
+            preference:
+              matchExpressions:
+              - key: k8s.visla.us/node-type
+                operator: In
+                values:
+                - GENERAL
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - {{ .Values.app.name }}
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: {{ .Values.app.name }}
+          image: {{ .Values.image.repo }}:{{ .Values.image.tag }}
+          # entrypoint.sh drops to the non-root nanobot user via setpriv.
+          command: ["gateway"]
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          ports:
+            - containerPort: {{ .Values.webuiPort }}
+              name: http-webui
+            - containerPort: {{ .Values.healthPort }}
+              name: http-health
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.healthPort }}
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.healthPort }}
+            initialDelaySeconds: 60
+            periodSeconds: 60
+            failureThreshold: 3
+          env:
+            # Activates the entrypoint's config seeding path: initialize
+            # /home/nanobot/.nanobot/config.json from render-config.json on
+            # first boot; existing (runtime-edited) configs are kept.
+            - name: RENDER
+              value: "true"
+            - name: VISLA_CURRENT_USER_URL
+              value: {{ .Values.visla.currentUserUrl }}
+            - name: VISLA_ADMIN_API_BASE_URL
+              value: {{ .Values.visla.adminApiBaseUrl }}
+            # Resolved by the config loader into ${...} placeholders
+            # (tokenIssueSecret) at every startup. Sourced from the shared
+            # visla-main Secret — same pattern as visla-api (all credentials
+            # live in k8s Secrets, never in git/values).
+            - name: NANOBOT_WEB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: visla-main
+                  key: nanobot-web-token
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: visla-main
+                  key: anthropic-api-key
+            # Optional: rotation via `kubectl rollout restart deployment/nanobot`
+            # after updating the visla-main Secret entry — config loader resolves
+            # ${VAR} placeholders from the container env at every startup.
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: visla-main
+                  key: openai-api-key
+                  optional: true
+            - name: OPENAI_BASE_URL
+              value: {{ .Values.providers.openai.baseUrl | default "https://api.openai.com/v1" }}
+{{- if .Values.customModel.providerName }}
+            # Custom OpenAI-compatible gateway (providers.<providerName>);
+            # key from the shared visla-main Secret under the fixed key
+            # "custom-model-api-key" — same pattern as visla-api (key names
+            # are fixed in the chart, values never carry them).
+            - name: CUSTOM_MODEL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: visla-main
+                  key: custom-model-api-key
+{{- end }}
+          volumeMounts:
+            # Persistent data dir: config.json, sessions, transcripts.
+            - name: data
+              mountPath: /home/nanobot/.nanobot
+            # Agent workspace (skills, memory, cron, templates) — separate PVC
+            # so skill installs survive pod restarts and image upgrades.
+            - name: workspace
+              mountPath: /home/nanobot/.nanobot/workspace
+            # Chart-managed config template consumed by the entrypoint.
+            - name: config
+              mountPath: /app/render-config.json
+              subPath: render-config.json
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Values.app.name }}-data
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: {{ .Values.app.name }}-workspace
+        - name: config
+          configMap:
+            name: {{ .Values.app.name }}-config

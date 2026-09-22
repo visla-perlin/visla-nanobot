@@ -1,0 +1,54 @@
+app:
+  name: nanobot
+
+# WebUI / WebSocket channel port (public); gateway /health port (probes).
+webuiPort: 8765
+healthPort: 18790
+namespace: default
+
+# nanobot is stateful (config.json, sessions, transcripts, workspace on a
+# PVC) — keep replica at 1.
+replica: 1
+
+resources: {}
+
+persistence:
+  storageClass: ""
+  size: 20Gi
+
+# Skills / memory / cron / templates live in a separate PVC so skill installs
+# via the WebUI marketplace survive both pod restarts and image upgrades
+# (sync_workspace_templates only seeds missing files on first boot).
+workspaceSize: 5Gi
+
+providers:
+  openai:
+    # Public OpenAI by default; override per-region values for Azure OpenAI,
+    # self-hosted vLLM, or any OpenAI-compatible gateway. The config loader
+    # still resolves ${OPENAI_BASE_URL} from the container env, so users can
+    # also edit it via WebUI settings without rebuilding.
+    baseUrl: https://api.openai.com/v1
+
+# Default agent model (agents.defaults.model). Format: <provider>/<model>.
+# Use a custom provider prefix (e.g. "myllm/gpt-5.6-luna") to route
+# through the OpenAI-compatible endpoint declared in customModel below.
+defaultModel: openai/gpt-5.6-luna
+
+# OpenAI-compatible custom endpoint (self-hosted gateway, internal LLM proxy,
+# vLLM, etc.). Renders as providers.<providerName> in config.json; the API
+# key comes from the visla-main Secret key named by secretKey.
+# Leave empty (default) to skip — only needed when defaultModel's prefix is
+# a custom provider, not a built-in one (openai/anthropic/...).
+customModel:
+  providerName: ""   # e.g. "myllm" — no collision with built-in names
+  baseUrl: ""        # e.g. "https://llm-gateway.internal/v1"
+  # API key is read from the visla-main Secret under the fixed key
+  # "custom-model-api-key" (secretKeyRef) — patch it once per cluster.
+
+visla:
+  currentUserUrl: https://admin-api.prod01.visla.us/api/my/current-user
+  adminApiBaseUrl: https://admin-api.prod01.visla.us
+
+# Visla usernames/emails allowed to use the WebUI admin surface
+# (channels.websocket.vislaAdminUsers). Empty = everyone is admin.
+vislaAdminUsers: []

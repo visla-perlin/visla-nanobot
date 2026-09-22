@@ -1,0 +1,25 @@
+environment:
+  name: us-west-2-test
+  profile: prod
+
+image:
+  repo: 820814109514.dkr.ecr.us-west-2.amazonaws.com/nanobot
+  tag: stable
+
+host: nanobot.test.visla.us
+
+region: us-west-2
+replica: 1
+
+resources:
+  requests:
+    cpu: "0.5"
+    memory: "1Gi"
+  limits:
+    cpu: "2"
+    memory: "2Gi"
+
+vislaAdminUsers:
+  - porter.liu@visla.us
+  - perlin.gan@visla.us
+  - allan.song@visla.us

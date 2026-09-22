@@ -1,0 +1,102 @@
+# Jenkins build image — full in-container toolchain.
+#
+# The build machine (Jenkins agent) only needs Docker: the WebUI is compiled
+# inside a node image and the Python package inside a uv image; the runtime
+# image carries neither. Byte-for-byte identical builds regardless of what is
+# installed on the agent.
+#
+# Usage:
+#   docker build -f Jenkins_Dockerfile -t nanobot:git-<sha> .
+# Optional build args:
+#   NANOBOT_CHANNELS=whatsapp,telegram   channel deps preinstalled into the venv
+#   NANOBOT_EXTRAS=                      extras passed to `uv pip install .[...]`
+#   RUNTIME_BASE=python:3.12-bookworm-slim   runtime stage base (override when
+#                                          a partial mirror cannot serve it)
+
+# Global (pre-FROM) so stage 3's FROM can reference it.
+ARG RUNTIME_BASE=python:3.12-slim
+
+# ---- Stage 1: WebUI bundle (node toolchain) -------------------------------
+FROM node:24-bookworm-slim AS webui-builder
+
+WORKDIR /app
+COPY webui/package.json webui/package-lock.json ./webui/
+WORKDIR /app/webui
+RUN npm ci
+COPY webui/ ./
+COPY packages/client-events/ /app/packages/client-events/
+RUN mkdir -p /app/nanobot/web && npm run build
+
+# ---- Stage 2: Python package + channel deps (uv toolchain) ----------------
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS package-builder
+
+WORKDIR /app
+# Keep the runtime environment writable by the non-root nanobot user: enabled
+# channels may install their manifest-declared dependencies at startup via
+# `python -m pip` (nanobot/optional_features.py), so the venv must carry pip.
+ENV VIRTUAL_ENV=/app/.venv
+ENV PATH="/app/.venv/bin:$PATH"
+RUN uv venv --seed "$VIRTUAL_ENV"
+
+# Dependency layer first (cached across code-only changes).
+ARG NANOBOT_EXTRAS=
+COPY pyproject.toml README.md LICENSE THIRD_PARTY_NOTICES.md hatch_build.py ./
+RUN mkdir -p nanobot && touch nanobot/__init__.py && \
+    if [ -n "$NANOBOT_EXTRAS" ]; then \
+        NANOBOT_SKIP_WEBUI_BUILD=1 uv pip install \
+            --python "$VIRTUAL_ENV/bin/python" --no-cache ".[${NANOBOT_EXTRAS}]"; \
+    else \
+        NANOBOT_SKIP_WEBUI_BUILD=1 uv pip install \
+            --python "$VIRTUAL_ENV/bin/python" --no-cache .; \
+    fi && \
+    rm -rf nanobot
+
+# Full source + the WebUI bundle built in stage 1, installed into the venv.
+COPY nanobot/ nanobot/
+COPY scripts/install_channel_dependencies.py scripts/
+COPY --from=webui-builder /app/nanobot/web/dist/ nanobot/web/dist/
+RUN NANOBOT_SKIP_WEBUI_BUILD=1 uv pip install --python "$VIRTUAL_ENV/bin/python" --no-cache .
+
+# Preinstall selected channel dependencies from their manifests.
+ARG NANOBOT_CHANNELS=whatsapp
+RUN for channel in $(printf '%s' "$NANOBOT_CHANNELS" | tr ',' ' '); do \
+        python -m scripts.install_channel_dependencies "$channel"; \
+    done
+
+# ---- Stage 3: runtime (no node, no uv) -------------------------------------
+# The uv base image's interpreter is the official python:3.12-bookworm-slim
+# build, so the venv copied below resolves its python symlink identically.
+FROM ${RUNTIME_BASE}
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates git bubblewrap openssh-client libmagic1 && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+ENV VIRTUAL_ENV=/app/.venv
+ENV PATH="/app/.venv/bin:$PATH"
+COPY --from=package-builder /app/.venv /app/.venv
+
+# Render deploy template (see render.yaml); only used when RENDER=true.
+COPY render-config.json ./
+
+# Create the non-root user and hand ownership of the writable virtualenv to it.
+RUN useradd -m -u 1000 -s /bin/bash nanobot && \
+    mkdir -p /home/nanobot/.nanobot && \
+    chown -R nanobot:nanobot /home/nanobot /app/.venv
+
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/entrypoint.sh && chmod +x /usr/local/bin/entrypoint.sh
+
+# Start as root so the entrypoint can chown the data dir before dropping to
+# the non-root nanobot user via setpriv (see entrypoint.sh).
+USER root
+ENV HOME=/home/nanobot
+ENV PYTHONUNBUFFERED=1 PYTHONFAULTHANDLER=1
+
+# Gateway health endpoint and WebUI/WebSocket channel ports.
+EXPOSE 18790 8765
+
+ENTRYPOINT ["entrypoint.sh"]
+CMD ["status"]
