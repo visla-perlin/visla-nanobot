@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import pytest
 from websockets.datastructures import Headers
 from websockets.http11 import Request
 
@@ -18,17 +19,19 @@ def _user(user_name: str = "perlin.gan", email: str = "perlin.gan@visla.us") -> 
     return VislaUser(id=26, email=email, user_name=user_name, type="org_admin", status="active")
 
 
+def _noop(*_args: object, **_kwargs: object) -> None:
+    """Typed no-op for the quiet logger stub (keeps strict type checkers happy)."""
+
+
+_QUIET_LOG = SimpleNamespace(info=_noop, warning=_noop, error=_noop, debug=_noop)
+
+
 def _handler(admin_users: list[str]) -> GatewayHTTPHandler:
     handler = object.__new__(GatewayHTTPHandler)
     handler.config = WebSocketConfig(visla_auth_enabled=True, visla_admin_users=admin_users)
     handler.tokens = GatewayTokenStore()
-    handler._visla_attempts = VislaAttemptLimiter()
-    handler._log = SimpleNamespace(
-        info=lambda *_a, **_k: None,
-        warning=lambda *_a, **_k: None,
-        error=lambda *_a, **_k: None,
-        debug=lambda *_a, **_k: None,
-    )
+    handler._visla_attempts = VislaAttemptLimiter()  # pyright: ignore[reportPrivateUsage]
+    handler._log = _QUIET_LOG  # pyright: ignore[reportPrivateUsage]
     return handler
 
 
@@ -51,29 +54,31 @@ def test_visla_token_store_keeps_latest_profile():
 
 
 def test_is_visla_admin_empty_list_or_operator_paths_allowed():
-    assert _handler([])._is_visla_admin("26") is True
-    assert _handler(["alice"])._is_visla_admin(None) is True
-    assert _handler(["alice"])._is_visla_admin("") is True
+    assert _handler([])._is_visla_admin("26") is True  # pyright: ignore[reportPrivateUsage]
+    assert _handler(["alice"])._is_visla_admin(None) is True  # pyright: ignore[reportPrivateUsage]
+    assert _handler(["alice"])._is_visla_admin("") is True  # pyright: ignore[reportPrivateUsage]
 
 
 def test_is_visla_admin_matches_name_or_email_case_insensitively():
     handler = _handler(["Alice", "BOB@x.io"])
     handler.tokens.visla_tokens.put_profile(_user(user_name="alice", email="a@x.io"))
-    assert handler._is_visla_admin("26") is True
+    assert handler._is_visla_admin("26") is True  # pyright: ignore[reportPrivateUsage]
     handler.tokens.visla_tokens.put_profile(_user(user_name="bob", email="bob@X.io"))
-    assert handler._is_visla_admin("26") is True
+    assert handler._is_visla_admin("26") is True  # pyright: ignore[reportPrivateUsage]
 
 
 def test_is_visla_admin_denies_unlisted_or_unknown_user():
     handler = _handler(["alice"])
     handler.tokens.visla_tokens.put_profile(_user(user_name="mallory", email="m@x.io"))
-    assert handler._is_visla_admin("26") is False
+    assert handler._is_visla_admin("26") is False  # pyright: ignore[reportPrivateUsage]
     # Unknown user id without a stored profile fails closed.
-    assert handler._is_visla_admin("99") is False
+    assert handler._is_visla_admin("99") is False  # pyright: ignore[reportPrivateUsage]
 
 
-async def test_visla_exchange_stores_profile_and_reports_admin(monkeypatch):
-    async def fake_validate(url: str, token: str) -> VislaUser:
+async def test_visla_exchange_stores_profile_and_reports_admin(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def fake_validate(_url: str, _token: str) -> VislaUser:
         return _user()
 
     handler = _handler(["perlin.gan"])
@@ -83,7 +88,7 @@ async def test_visla_exchange_stores_profile_and_reports_admin(monkeypatch):
         Headers({"Host": "gateway.example:8765", "X-Nanobot-Auth": "visla-jwt"}),
     )
 
-    response = await handler._handle_visla_auth(
+    response = await handler._handle_visla_auth(  # pyright: ignore[reportPrivateUsage]
         SimpleNamespace(remote_address=("10.0.0.8", 5000)), request
     )
 
@@ -91,4 +96,4 @@ async def test_visla_exchange_stores_profile_and_reports_admin(monkeypatch):
     assert json.loads(response.body)["user_id"] == "26"
     profile = handler.tokens.visla_tokens.profile("26")
     assert profile is not None and profile.user_name == "perlin.gan"
-    assert handler._is_visla_admin("26") is True
+    assert handler._is_visla_admin("26") is True  # pyright: ignore[reportPrivateUsage]
